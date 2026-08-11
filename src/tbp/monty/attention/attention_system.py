@@ -45,7 +45,7 @@ class AttentionSystem:
 
     def __init__(
         self,
-        voxel_size: float = 0.005,
+        voxel_size: float = 0.01,
         voxel_lifetime: int = INITIAL_WEIGHT,
         telemetry: AttentionSystemTelemetry | None = None,
     ):
