@@ -214,9 +214,13 @@ class AttentionSystem:
         seen_before = fresh.index.intersection(remembered.index)
         if len(seen_before):
             fresh.loc[seen_before, "weight"] = (
-                fresh.loc[seen_before, "weight"].to_numpy()
-                + remembered.loc[seen_before, "weight"].to_numpy()
-            ).astype(np.int32)
+                (
+                    fresh.loc[seen_before, "weight"].to_numpy()
+                    + remembered.loc[seen_before, "weight"].to_numpy()
+                )
+                .clip(-np.inf, self._voxel_lifetime)
+                .astype(np.int32)
+            )
             fresh.loc[seen_before, "count"] = (
                 fresh.loc[seen_before, "count"].to_numpy()
                 + remembered.loc[seen_before, "count"].to_numpy()

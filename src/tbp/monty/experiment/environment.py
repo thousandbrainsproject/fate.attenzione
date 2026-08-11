@@ -701,7 +701,7 @@ class FateAttenzioneInterface(Interface):
         self.env.remove_all_objects()
 
         primary_target = self.env.add_object(
-            name="potted_meat_can",
+            name="mug",
             position=np.array([0, 1.5, 0.08]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
@@ -716,7 +716,7 @@ class FateAttenzioneInterface(Interface):
 
         # totally not distractors
         self.env.add_object(
-            name="mug",
+            name="potted_meat_can",
             position=np.array([0.2, 1.5, 0]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
