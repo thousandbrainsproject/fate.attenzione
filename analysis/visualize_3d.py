@@ -33,11 +33,10 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from detailed_stats import available_episodes, extract_rgba, load_episode_stats
 from matplotlib import colors as mcolors
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
-
-from detailed_stats import available_episodes, extract_rgba, load_episode_stats
 
 # Voxel coordinates are lower corners; offset to centres for plotting.
 VOXEL_CENTRE_OFFSET = 0.5
@@ -421,7 +420,7 @@ def create_segmentation_animation(
     # evidence table beside them.
     ncols = 2 + int(attention.has_grids)
     nrows = 1 + int(lm.has_evidence)
-    fig = plt.figure(figsize=(6.5 * ncols, 5.5 * nrows))
+    fig = plt.figure(figsize=(4.5 * ncols, 4.5 * nrows))
     # The 3D panels' colorbars sit between panels; give them room so their labels
     # do not collide with the next panel's y-axis.
     grid = fig.add_gridspec(nrows, ncols, wspace=0.35, hspace=0.3)
