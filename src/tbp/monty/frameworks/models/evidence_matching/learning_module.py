@@ -1144,7 +1144,7 @@ class EvidenceGraphLM(GraphLM):
             object_id, first_input_channel
         )[:, 0, :]
 
-        buffer_location_distance = 0.05
+        buffer_location_distance = 0.02
         n = 10
         # n samples equally spaced along ±surface normal, up to the buffer distance.
         # Skip the zero offset; the original surface points are kept separately.
