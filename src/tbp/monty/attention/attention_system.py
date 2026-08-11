@@ -29,6 +29,7 @@ def empty_voxel_grid() -> pd.DataFrame:
         index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
     )
 
+INITIAL_WEIGHT = 6
 
 class AttentionSystem:
     """Persisteng, LM and SM informed global attention space.
@@ -45,7 +46,7 @@ class AttentionSystem:
     def __init__(
         self,
         voxel_size: float = 0.005,
-        voxel_lifetime: int = 6,
+        voxel_lifetime: int = INITIAL_WEIGHT,
         telemetry: AttentionSystemTelemetry | None = None,
     ):
         """Initialize the attention system.
@@ -152,18 +153,15 @@ class AttentionSystem:
             The grid built from this step's regions alone.
 
         """
-        per_region_voxels = []
-        for region in regions:
-            locations = [aw.location for aw in region if aw.location is not None]
-            if not locations:
-                continue
-            per_region_voxels.extend(
-                voxelize_and_bin_points(np.asarray(locations), self._voxel_size)
-            )
-        if not per_region_voxels:
-            return empty_voxel_grid()
+        attention_weights = [aw for region in regions for aw in region]
+        covoxel_points = voxelize_and_bin_points(
+            np.asarray([aw.location for aw in attention_weights]), self._voxel_size
+        )
+        weights = []
+        for indices in covoxel_points.values():
+            weights.append(np.mean([attention_weights[i].weight for i in indices]))
 
-        index = pd.MultiIndex.from_tuples(per_region_voxels, names=VOXEL_LEVELS)
+        index = pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS)
         counts = (
             pd.Series(1, index=index, dtype=np.int32)
             .groupby(level=list(VOXEL_LEVELS))
@@ -172,7 +170,7 @@ class AttentionSystem:
         )
         return pd.DataFrame(
             {
-                "weight": np.full(len(counts), self._voxel_lifetime, dtype=np.int32),
+                "weight": weights,
                 "count": counts,
             }
         )
@@ -215,7 +213,10 @@ class AttentionSystem:
         fresh = proposed.copy()
         seen_before = fresh.index.intersection(remembered.index)
         if len(seen_before):
-            fresh.loc[seen_before, "weight"] = self._voxel_lifetime
+            fresh.loc[seen_before, "weight"] = (
+                fresh.loc[seen_before, "weight"].to_numpy()
+                + remembered.loc[seen_before, "weight"].to_numpy()
+            ).astype(np.int32)
             fresh.loc[seen_before, "count"] = (
                 fresh.loc[seen_before, "count"].to_numpy()
                 + remembered.loc[seen_before, "count"].to_numpy()

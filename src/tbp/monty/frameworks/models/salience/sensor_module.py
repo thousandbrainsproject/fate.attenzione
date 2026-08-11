@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import quaternion as qt
 
+from tbp.monty.attention.attention_system import INITIAL_WEIGHT
 from tbp.monty.cmp import AttentionWeight, Goal
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.models.abstract_monty_classes import (
@@ -183,7 +184,7 @@ class SalienceSM(SensorModule):
         return segmentation_map, [
             AttentionWeight(
                 location=surface_locations[i],
-                weight=surface_salience[i],
+                weight=INITIAL_WEIGHT,
                 sender_id=self._sensor_module_id,
                 sender_type="SM",
             )
