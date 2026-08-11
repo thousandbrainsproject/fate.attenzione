@@ -566,5 +566,8 @@ def apply_rf_transform_to_points(
     location_offset = rotated_locs + ref_point_offset
     # Undo the 0 centering to bring back into model reference frame
     transformed_locations = location_offset + ref_point2
-    features = rotate_multiple_pose_dependent_features(features, object_rotation.inv())
+    if features is not None:
+        features = rotate_multiple_pose_dependent_features(
+            features, object_rotation.inv()
+        )
     return transformed_locations, features

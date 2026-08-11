@@ -39,6 +39,7 @@ from tbp.monty.frameworks.utils.graph_matching_utils import (
     add_pose_features_to_tolerances,
     get_scaled_evidences,
 )
+from tbp.monty.frameworks.utils.spatial_arithmetics import apply_rf_transform_to_points
 from tbp.monty.geometry import Rotation
 
 __all__ = ["EvidenceGraphLM", "InvalidEvidenceThresholdConfig"]
@@ -1138,13 +1139,21 @@ class EvidenceGraphLM(GraphLM):
 
         mlh = self.get_mlh_for_object(object_id)
         logging.info(f"MLH for {object_id}: {mlh}")
-        centered = graph_locations - graph_locations.mean(axis=0)
-        rotated = mlh["rotation"].inv().apply(centered)
-        translated = rotated + mlh["location"]
+
+        current_loc = self.buffer.get_current_location(input_channel="first")
+
+        # Abusing this function because time.
+        translated, _ = apply_rf_transform_to_points(
+            locations=graph_locations,
+            features=None,
+            location_rel_model=current_loc,
+            object_location_rel_body=mlh["location"],
+            object_rotation=mlh["rotation"],
+        )
         return [
             AttentionWeight(
                 location=loc,
-                weight=-np.inf,
+                weight=-7,
                 sender_id=self.learning_module_id,
                 sender_type="LM",
             )
