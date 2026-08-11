@@ -243,6 +243,26 @@ class AttentionWeight(Message):
     def _check_all_attributes(self):
         pass
 
+def encode_attention_weight(attention_weight: AttentionWeight) -> dict[str, Any]:
+    """Encode an attention weight into a dictionary.
+
+    Args:
+        attention_weight: The attention weight to encode.
+
+    Returns:
+        A dictionary containing the attention weight's attributes.
+    """
+    return {
+        "location": attention_weight.location,
+        "weight": attention_weight.weight,
+        "morphological_features": attention_weight.morphological_features,
+        "non_morphological_features": attention_weight.non_morphological_features,
+        "confidence": attention_weight.confidence,
+        "use_state": attention_weight.use_state,
+        "sender_id": attention_weight.sender_id,
+        "sender_type": attention_weight.sender_type,
+    }
+
 
 class Goal(Message):
     """Specialization of :class:`Message` for goals with null (None) values allowed.
@@ -386,3 +406,4 @@ def encode_goal(goal: Goal) -> dict[str, Any]:
 
 
 BufferEncoder.register(Goal, encode_goal)
+BufferEncoder.register(AttentionWeight, encode_attention_weight)

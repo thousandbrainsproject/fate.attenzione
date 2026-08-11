@@ -23,12 +23,13 @@ from tbp.monty.memento import Memento
 def empty_voxel_grid() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "age": pd.Series(dtype=np.int32),
+            "weight": pd.Series(dtype=np.int32),
             "count": pd.Series(dtype=np.int32),
         },
         index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
     )
 
+INITIAL_WEIGHT = 6
 
 class AttentionSystem:
     """Persisteng, LM and SM informed global attention space.
@@ -45,7 +46,7 @@ class AttentionSystem:
     def __init__(
         self,
         voxel_size: float = 0.005,
-        voxel_lifetime: int = 6,
+        voxel_lifetime: int = INITIAL_WEIGHT,
         telemetry: AttentionSystemTelemetry | None = None,
     ):
         """Initialize the attention system.
@@ -80,7 +81,7 @@ class AttentionSystem:
 
     @property
     def grid(self) -> pd.DataFrame:
-        """The voxel grid: (x, y, z) MultiIndex rows with age/count columns."""
+        """The voxel grid: (x, y, z) MultiIndex rows with weight/count columns."""
         return self._voxel_grid
 
     def step(
@@ -97,11 +98,11 @@ class AttentionSystem:
             Filtered list of goals.
         """
         proposed = self._voxelize_regions(regions)
-        # Age what is already held before folding in what was just proposed, so
+        # Decay what is already held before folding in what was just proposed, so
         # that a re-proposed voxel's fresh row lands on top of the tick rather
         # than after it.
-        aged = self._age(self._voxel_grid)
-        merged = self._merge(aged, proposed)
+        decayed = self._decay(self._voxel_grid)
+        merged = self._merge(decayed, proposed)
         self._voxel_grid = self._expire(merged)
         self._telemetry.voxel_grid(self._voxel_grid)
         filtered = self._filter(goals)
@@ -152,18 +153,15 @@ class AttentionSystem:
             The grid built from this step's regions alone.
 
         """
-        per_region_voxels = []
-        for region in regions:
-            locations = [aw.location for aw in region if aw.location is not None]
-            if not locations:
-                continue
-            per_region_voxels.extend(
-                voxelize_and_bin_points(np.asarray(locations), self._voxel_size)
-            )
-        if not per_region_voxels:
-            return empty_voxel_grid()
+        attention_weights = [aw for region in regions for aw in region]
+        covoxel_points = voxelize_and_bin_points(
+            np.asarray([aw.location for aw in attention_weights]), self._voxel_size
+        )
+        weights = []
+        for indices in covoxel_points.values():
+            weights.append(np.mean([attention_weights[i].weight for i in indices]))
 
-        index = pd.MultiIndex.from_tuples(per_region_voxels, names=VOXEL_LEVELS)
+        index = pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS)
         counts = (
             pd.Series(1, index=index, dtype=np.int32)
             .groupby(level=list(VOXEL_LEVELS))
@@ -172,35 +170,35 @@ class AttentionSystem:
         )
         return pd.DataFrame(
             {
-                "age": np.full(len(counts), self._voxel_lifetime, dtype=np.int32),
+                "weight": weights,
                 "count": counts,
             }
         )
 
-    def _age(self, remembered: pd.DataFrame) -> pd.DataFrame:
+    def _decay(self, remembered: pd.DataFrame) -> pd.DataFrame:
         """Tick every held voxel one step closer to expiring.
 
         Args:
             remembered: The voxels held going into this step.
 
         Returns:
-            The frame with every age decremented by one.
+            The frame with every weight decremented by one.
 
         """
         if len(remembered) == 0:
             return remembered
 
-        aged = remembered.copy()
+        decayed = remembered.copy()
         # Subtracting through the frame would widen the dtype, so write back the
-        # declared one: age is meant to stay an integer count of steps.
-        aged["age"] = (aged["age"] - 1).astype(np.int32)
-        return aged
+        # declared one: weight is meant to stay an integer count of steps.
+        decayed["weight"] = (decayed["weight"] - 1).astype(np.int32)
+        return decayed
 
     def _merge(self, remembered: pd.DataFrame, proposed: pd.DataFrame) -> pd.DataFrame:
         """Merge this step's proposed voxels into the voxels already held.
 
         Args:
-            remembered: The voxels held from earlier steps, already aged.
+            remembered: The voxels held from earlier steps, already decayed.
             proposed: The grid built from this step's regions alone.
 
         Returns:
@@ -215,7 +213,14 @@ class AttentionSystem:
         fresh = proposed.copy()
         seen_before = fresh.index.intersection(remembered.index)
         if len(seen_before):
-            fresh.loc[seen_before, "age"] = self._voxel_lifetime
+            fresh.loc[seen_before, "weight"] = (
+                (
+                    fresh.loc[seen_before, "weight"].to_numpy()
+                    + remembered.loc[seen_before, "weight"].to_numpy()
+                )
+                .clip(-np.inf, self._voxel_lifetime)
+                .astype(np.int32)
+            )
             fresh.loc[seen_before, "count"] = (
                 fresh.loc[seen_before, "count"].to_numpy()
                 + remembered.loc[seen_before, "count"].to_numpy()
@@ -232,7 +237,7 @@ class AttentionSystem:
         """Drop voxels that haven't been seen in a while.
 
         Args:
-            data: A merged frame, possibly holding voxels aged past their end.
+            data: A merged frame, possibly holding voxels decayed past their end.
 
         Returns:
             The frame with expired rows removed.
@@ -240,7 +245,7 @@ class AttentionSystem:
         """
         if len(data) == 0:
             return data
-        return data[data["age"].to_numpy() > 0]
+        return data[data["weight"].to_numpy() > 0]
 
     def _filter(self, goals: Sequence[Goal]) -> list[Goal]:
         """Keep the goals that live in the updated grid.

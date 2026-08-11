@@ -10,12 +10,12 @@ are laid out as::
             "raw_observations": [{"rgba": (H, W, 4), ...}, ...],
             "sm_properties":    [{"sm_rotation", "sm_location"}, ...],
             "segmentation_maps": [(H, W) mask or None, ...],
-            "regions": [[{"location": (3,), "confidence": float, ...}, ...], ...],
+            "regions": [[{"location": (3,), "weight": float, ...}, ...], ...],
         },
         "attention_system": {            # was per-SM "region" telemetry
             "voxel_size": float,
             "voxel_lifetime": int,
-            "voxel_grids": [{"voxels": (V, 3), "age": (V,), "count": (V,)}, ...],
+            "voxel_grids": [{"voxels": (V, 3), "weight": (V,), "count": (V,)}, ...],
         },
         "LM_0": {"evidences": [...], "lm_processed_steps": [...], ...},
     }
@@ -33,11 +33,10 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from detailed_stats import available_episodes, extract_rgba, load_episode_stats
 from matplotlib import colors as mcolors
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
-
-from detailed_stats import available_episodes, extract_rgba, load_episode_stats
 
 # Voxel coordinates are lower corners; offset to centres for plotting.
 VOXEL_CENTRE_OFFSET = 0.5
@@ -105,12 +104,20 @@ class SMTelemetry:
         self.region_locations: list[np.ndarray] = []
         self.region_salience: list[np.ndarray] = []
         for region in sm.get("regions", []):
-            goals = [g for g in region if g.get("location") is not None]
+            located = [aw for aw in region if aw.get("location") is not None]
             self.region_locations.append(
-                np.array([g["location"] for g in goals], dtype=float).reshape(-1, 3)
+                np.array(
+                    [aw["location"] for aw in located], dtype=float
+                ).reshape(-1, 3)
             )
+            # Regions are AttentionWeights carrying the salience in "weight";
+            # stats recorded before the rename carried it in a Goal's
+            # "confidence".
             self.region_salience.append(
-                np.array([g["confidence"] for g in goals], dtype=float)
+                np.array(
+                    [aw.get("weight", aw.get("confidence")) for aw in located],
+                    dtype=float,
+                )
             )
 
     @property
@@ -170,26 +177,31 @@ class AttentionTelemetry:
 
     In the old telemetry the voxel grid rode inside the sensor module's
     ``region`` block; it is now recorded by the attention system itself, one
-    grid per Monty step, each voxel carrying its remaining ``age`` and its
-    proposal ``count``.
+    grid per Monty step, each voxel carrying its remaining ``weight`` (named
+    ``age`` in stats recorded before the rename) and its proposal ``count``.
 
     Attributes:
         voxel_size: Edge length of a voxel in meters, or None when no
             attention telemetry was recorded.
         voxel_lifetime: Steps a voxel survives without being re-proposed.
-        feature: Which voxel column colours the grid ("age" or "count").
+        feature: Which voxel column colours the grid ("weight" or "count").
     """
 
-    def __init__(self, stats: dict, feature: str = "age") -> None:
+    def __init__(self, stats: dict, feature: str = "weight") -> None:
         """Read the attention system's telemetry out of loaded episode stats.
 
         Args:
             stats: Loaded episode stats.
-            feature: Voxel column to expose for colouring.
+            feature: Voxel column to expose for colouring. "weight" reads the
+                "age" column instead when given stats recorded under the old
+                name.
         """
         attention = stats.get("attention_system", {})
         self.voxel_size = attention.get("voxel_size")
         self.voxel_lifetime = attention.get("voxel_lifetime")
+        grids = attention.get("voxel_grids", [])
+        if feature == "weight" and grids and "weight" not in grids[0]:
+            feature = "age"
         self.feature = feature
 
         self.centres: list[np.ndarray] = []
@@ -384,7 +396,7 @@ def create_segmentation_animation(
     fps: int = 2,
     interval: int = 500,
     marker_size: int = 5,
-    voxel_feature: str = "age",
+    voxel_feature: str = "weight",
     lm_id: int | str = 0,
 ) -> Path:
     """Animate the segmentation, region, and voxel-grid telemetry.
@@ -396,7 +408,9 @@ def create_segmentation_animation(
         fps: Frames per second of the saved gif.
         interval: Milliseconds between animation frames.
         marker_size: Scatter marker size in the 3D panels.
-        voxel_feature: Voxel column to colour the grid by ("age" or "count").
+        voxel_feature: Voxel column to colour the grid by ("weight" or
+            "count"); "weight" also reads stats recorded under the old "age"
+            name.
         lm_id: Learning module whose evidence to plot, when it was recorded.
 
     Returns:
@@ -421,7 +435,7 @@ def create_segmentation_animation(
     # evidence table beside them.
     ncols = 2 + int(attention.has_grids)
     nrows = 1 + int(lm.has_evidence)
-    fig = plt.figure(figsize=(6.5 * ncols, 5.5 * nrows))
+    fig = plt.figure(figsize=(4.5 * ncols, 4.5 * nrows))
     # The 3D panels' colorbars sit between panels; give them room so their labels
     # do not collide with the next panel's y-axis.
     grid = fig.add_gridspec(nrows, ncols, wspace=0.35, hspace=0.3)
@@ -472,11 +486,11 @@ def create_segmentation_animation(
     region_bar = plt.colorbar(region_anchor, ax=ax_region, fraction=0.046, pad=0.08)
     region_bar.set_label("Salience", rotation=270, labelpad=15)
 
-    # Age is bounded by the voxel lifetime, so its scale is known up front.
+    # Weight is bounded by the voxel lifetime, so its scale is known up front.
     # Count grows without bound, so its scale widens as larger values turn up;
     # it only ever widens, so a colour means the same thing from one frame to
     # the next.
-    if voxel_feature == "age" and attention.voxel_lifetime is not None:
+    if attention.feature in ("weight", "age") and attention.voxel_lifetime is not None:
         voxel_scale = {"vmin": 0.0, "vmax": float(attention.voxel_lifetime)}
     else:
         voxel_scale = {"vmin": 0.0, "vmax": 1.0}
@@ -704,9 +718,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--voxel-feature",
-        choices=("age", "count"),
-        default="age",
-        help="Voxel column to colour the grid by (default: age)",
+        choices=("weight", "count"),
+        default="weight",
+        help="Voxel column to colour the grid by (default: weight; reads the "
+        "old 'age' column from stats recorded before the rename)",
     )
     parser.add_argument("--fps", type=int, default=2, help="GIF frames per second")
     args = parser.parse_args()
