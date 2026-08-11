@@ -8,6 +8,8 @@
 # https://opensource.org/licenses/MIT.
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -18,6 +20,9 @@ from tbp.monty.frameworks.utils.plot_utils import add_patch_outline_to_view_find
 
 # turn interactive plotting off -- call plt.show() to open all figures
 plt.ioff()
+
+# Voxel coordinates are lower corners; offset to centres for plotting.
+_VOXEL_CENTRE_OFFSET = 0.5
 
 
 class LivePlotter:
@@ -35,15 +40,35 @@ class LivePlotter:
     """
 
     def __init__(self):
-        pass
+        self.save_dir: Path | None = None
+        # Inhibit points held on the LM after terminal checks are only applied by
+        # the attention system on the *next* Monty step. Buffer them so the plot
+        # shows inhibit on the step it actually affected the grid.
+        self._inhibit_applied_locations: np.ndarray = np.empty((0, 3))
+        # Growing axis limits so the attention panel does not jump/zoom each step.
+        self._attention_bounds: tuple[np.ndarray, np.ndarray] | None = None
 
-    def initialize_online_plotting(self):
-        self.fig, self.ax = plt.subplots(1, 3, figsize=(9, 6))
+    def initialize_online_plotting(self, save_dir: Path | str | None = None):
+        # Build mixed 2D/3D axes explicitly. plt.subplots() would leave orphaned 2D
+        # axes behind if we later replace slots with projection="3d".
+        self.fig = plt.figure(figsize=(12, 6))
         self.fig.subplots_adjust(top=1.1)
-        # self.colorbar = self.fig.colorbar(None, fraction=0.046, pad=0.04)
+        self.ax = [
+            self.fig.add_subplot(1, 4, 1),
+            self.fig.add_subplot(1, 4, 2),
+            self.fig.add_subplot(1, 4, 3, projection="3d"),
+            self.fig.add_subplot(1, 4, 4, projection="3d"),
+        ]
         self.setup_camera_ax()
         self.setup_sensor_ax()
         self.setup_mlh_ax()
+        self.setup_attention_ax()
+
+        self.save_dir = Path(save_dir) if save_dir is not None else None
+        if self.save_dir is not None:
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+        self._inhibit_applied_locations = np.empty((0, 3))
+        self._attention_bounds = None
 
     def hardcoded_assumptions(self, observation: Observations, model: Monty):
         """Extract some of the hardcoded assumptions from the observation.
@@ -58,7 +83,8 @@ class LivePlotter:
 
         Returns:
             A tuple of the first learning module, the first sensor module raw
-            observations, the patch depth, and the view finder rgba.
+            observations, the patch depth, the view finder rgba, the MLH, the
+            MLH model graph, and the attention system (or None).
         """
         first_learning_module = model.learning_modules[0]
         first_sensor_module = model.sensor_modules[0]
@@ -92,6 +118,7 @@ class LivePlotter:
         else:
             mlh = None
             mlh_model = None
+        attention_system = getattr(model, "attention_system", None)
         return (
             first_learning_module,
             first_sensor_module_raw_observations,
@@ -99,6 +126,7 @@ class LivePlotter:
             view_finder_rgba,
             mlh,
             mlh_model,
+            attention_system,
         )
 
     def show_observations(
@@ -109,10 +137,10 @@ class LivePlotter:
         view_finder_rgba,
         mlh,
         mlh_model,
+        attention_system,
         step: int,
         is_saccade_on_image_data_loader=False,
     ) -> None:
-        self.fig.suptitle(f"Observation at step {step}")
         self.show_view_finder(
             first_sensor_module_raw_observations,
             first_learning_module,
@@ -123,7 +151,78 @@ class LivePlotter:
         self.show_patch(first_sensor_depth)
         if mlh_model:
             self.show_mlh(mlh, mlh_model)
+        # propose_region after this step is what will be applied next step. What
+        # attention already applied this step is the buffered previous proposal.
+        pending_inhibit = self._inhibited_locations(first_learning_module)
+        applied_inhibit = self._inhibit_applied_locations
+        self._inhibit_applied_locations = pending_inhibit
+        status = self._recognition_status(
+            first_learning_module, inhibit_applied=len(applied_inhibit) > 0
+        )
+        title = f"Observation at step {step}"
+        if status:
+            title = f"{title}\n{status}"
+        self.fig.suptitle(
+            title,
+            color="crimson" if "inhibit applied" in status else "black",
+        )
+        self.show_attention(
+            attention_system,
+            status=status,
+            inhibited_locations=applied_inhibit,
+        )
         plt.pause(0.00001)
+        self._save_frame(step)
+
+    def _save_frame(self, step: int) -> None:
+        """Write the current figure to ``save_dir`` if one was configured.
+
+        Args:
+            step: Episode step index used in the filename.
+        """
+        if self.save_dir is None:
+            return
+        path = self.save_dir / f"step_{step:04d}.png"
+        self.fig.savefig(path, dpi=120, bbox_inches="tight")
+
+    def _inhibited_locations(self, first_learning_module) -> np.ndarray:
+        """Locations from the LM's current negative attention region.
+
+        Returns:
+            An ``(N, 3)`` array of inhibited locations, or empty when none.
+        """
+        if not hasattr(first_learning_module, "propose_region"):
+            return np.empty((0, 3))
+        region = first_learning_module.propose_region() or []
+        locations = [
+            aw.location
+            for aw in region
+            if aw.location is not None and aw.weight < 0
+        ]
+        if not locations:
+            return np.empty((0, 3))
+        return np.asarray(locations, dtype=float)
+
+    def _recognition_status(
+        self, first_learning_module, inhibit_applied: bool = False
+    ) -> str:
+        """Summarize terminal state and applied object-region inhibition.
+
+        Args:
+            first_learning_module: The LM used for terminal-state text.
+            inhibit_applied: Whether inhibit points were applied to attention
+                this step (lagged one step from ``propose_region``).
+
+        Returns:
+            A short status string, or empty when neither applies.
+        """
+        parts = []
+        terminal = getattr(first_learning_module, "terminal_state", None)
+        if terminal is not None:
+            parts.append(f"terminal={terminal}")
+        if inhibit_applied:
+            parts.append("inhibit applied")
+        return " | ".join(parts)
 
     def show_view_finder(
         self,
@@ -184,12 +283,14 @@ class LivePlotter:
         # self.colorbar.update_normal(self.depth_image)
 
     def show_mlh(self, mlh, mlh_model):
+        ax = self.ax[2]
         if not mlh_model:
-            self.ax[2].set_title("No MLH")
+            ax.set_title("No MLH")
+            self._hide_3d_axes(ax)
             return
 
-        self.ax[2].cla()
-        self.ax[2].scatter(
+        ax.cla()
+        ax.scatter(
             mlh_model.pos[:, 1],
             mlh_model.pos[:, 0],
             mlh_model.pos[:, 2],
@@ -197,12 +298,160 @@ class LivePlotter:
             s=2,
         )
         # add mlh location to the graph
-        self.ax[2].scatter(
+        ax.scatter(
             mlh["location"][1], mlh["location"][0], mlh["location"][2], c="red", s=15
         )
-        self.ax[2].set_title("MLH")
-        self.ax[2].set_axis_off()
-        self.ax[2].set_aspect("equal")
+        ax.set_title("MLH")
+        ax.set_aspect("equal")
+        self._hide_3d_axes(ax)
+
+    def show_attention(
+        self,
+        attention_system,
+        status: str = "",
+        inhibited_locations: np.ndarray | None = None,
+    ) -> None:
+        """Plot the attention system's current voxel filter.
+
+        Shows voxels held in ``attention_system.grid`` after the latest
+        ``attention_system.step``, plus inhibit points applied this step
+        (lagged one step from LM ``propose_region``).
+
+        Args:
+            attention_system: The model's attention system, or None.
+            status: Recognition / inhibit status string for the title.
+            inhibited_locations: ``(N, 3)`` inhibit points applied this step.
+        """
+        ax = self.ax[3]
+        ax.cla()
+        # Side view: X horizontal, Z vertical — makes XY-overlap / Z-mismatch obvious.
+        ax.view_init(elev=0, azim=-90)
+
+        if inhibited_locations is None:
+            inhibited_locations = np.empty((0, 3))
+        else:
+            inhibited_locations = np.asarray(inhibited_locations, dtype=float).reshape(
+                -1, 3
+            )
+
+        inhibiting = len(inhibited_locations) > 0 or "inhibit applied" in status
+        title_color = "crimson" if inhibiting else "black"
+
+        centres = np.empty((0, 3))
+        weights = np.empty(0)
+        voxel_size = (
+            attention_system.voxel_size if attention_system is not None else 0.01
+        )
+        if attention_system is not None and len(attention_system.grid) > 0:
+            grid = attention_system.grid
+            indices = grid.index.to_frame(index=False).to_numpy(dtype=float)
+            centres = (indices + _VOXEL_CENTRE_OFFSET) * voxel_size
+            weights = grid["weight"].to_numpy(dtype=float)
+
+        if len(centres) == 0 and len(inhibited_locations) == 0:
+            ax.set_title("Attention Filter (empty)", color=title_color)
+            ax.text2D(0.5, 0.5, "No voxels", transform=ax.transAxes, ha="center")
+            self._hide_3d_axes(ax)
+            return
+
+        # mplot3d depth-sorts; with azim=-90 the camera looks along -Y, so bias Y.
+        y_bias = voxel_size
+        if len(inhibited_locations):
+            inhibited_plot = inhibited_locations.copy()
+            inhibited_plot[:, 1] -= y_bias
+            ax.scatter(
+                inhibited_plot[:, 0],
+                inhibited_plot[:, 1],
+                inhibited_plot[:, 2],
+                c="lightcoral",
+                s=3,
+                alpha=0.25,
+                depthshade=False,
+            )
+
+        if len(centres):
+            centres_plot = centres.copy()
+            centres_plot[:, 1] += y_bias
+            ax.scatter(
+                centres_plot[:, 0],
+                centres_plot[:, 1],
+                centres_plot[:, 2],
+                c=weights,
+                cmap="viridis",
+                s=28,
+                alpha=1.0,
+                vmin=0.0,
+                vmax=float(attention_system.voxel_lifetime),
+                depthshade=False,
+                edgecolors="k",
+                linewidths=0.35,
+            )
+
+        title_parts = []
+        if len(centres):
+            title_parts.append(f"{len(centres)} grid voxels")
+        if len(inhibited_locations):
+            title_parts.append(f"{len(inhibited_locations)} inhibit applied")
+        ax.set_title(
+            f"Attention ({', '.join(title_parts)})",
+            color=title_color,
+            fontsize=9,
+        )
+
+        bound_points = (
+            np.vstack([centres, inhibited_locations])
+            if len(centres) and len(inhibited_locations)
+            else centres
+            if len(centres)
+            else inhibited_locations
+        )
+        self._set_attention_limits(ax, bound_points, voxel_size)
+        self._hide_3d_axes(ax)
+
+    def _set_attention_limits(
+        self, ax, points: np.ndarray, voxel_size: float
+    ) -> None:
+        """Keep a padded, monotonically growing view of the attention cloud."""
+        mins = points.min(axis=0)
+        maxs = points.max(axis=0)
+        if self._attention_bounds is None:
+            self._attention_bounds = (mins.copy(), maxs.copy())
+        else:
+            self._attention_bounds = (
+                np.minimum(self._attention_bounds[0], mins),
+                np.maximum(self._attention_bounds[1], maxs),
+            )
+        bmin, bmax = self._attention_bounds
+        span = np.maximum(bmax - bmin, voxel_size)
+        # Square the view and add padding so points are not clipped at the edge.
+        side = float(np.max(span)) * 1.25
+        mid = 0.5 * (bmin + bmax)
+        half = 0.5 * max(side, 4.0 * voxel_size)
+        ax.set_xlim(mid[0] - half, mid[0] + half)
+        ax.set_ylim(mid[1] - half, mid[1] + half)
+        ax.set_zlim(mid[2] - half, mid[2] + half)
+        ax.set_box_aspect([1, 1, 1])
+
+    @staticmethod
+    def _hide_3d_axes(ax) -> None:
+        """Fully hide a 3D axis frame, panes, ticks, and grid.
+
+        ``Axes3D.set_axis_off()`` alone is unreliable after ``cla()`` / aspect
+        changes, so clear each axis component explicitly.
+        """
+        ax.set_axis_off()
+        ax.grid(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_zticks([])
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis.pane.fill = False
+            axis.pane.set_edgecolor("none")
+            axis.pane.set_alpha(0)
+            axis.line.set_color((0.0, 0.0, 0.0, 0.0))
+            axis.set_ticklabels([])
+        # Private flag still used by some matplotlib 3D draws after set_axis_off.
+        ax._axis3don = False
 
     def add_text(
         self,
@@ -248,7 +497,10 @@ class LivePlotter:
         self.depth_image = None
 
     def setup_mlh_ax(self):
-        self.ax[2] = plt.subplot(1, 3, 3, projection="3d")
         self.ax[2].set_title("MLH")
-        self.ax[2].set_axis_off()
-        self.ax[2].set_aspect("equal")
+        self._hide_3d_axes(self.ax[2])
+
+    def setup_attention_ax(self):
+        self.ax[3].set_title("Attention Filter")
+        self.ax[3].view_init(elev=0, azim=-90)
+        self._hide_3d_axes(self.ax[3])

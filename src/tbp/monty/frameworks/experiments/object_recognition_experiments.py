@@ -88,7 +88,9 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
         self.logger_handler.pre_episode(self.logger_args)
 
         if self.show_sensor_output:
-            self.live_plotter.initialize_online_plotting()
+            self.live_plotter.initialize_online_plotting(
+                save_dir=self._live_plot_save_dir()
+            )
 
     def run_episode_steps(self) -> int:
         """Runs one episode of the experiment.
@@ -105,16 +107,6 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
         actions: list[Action] = []
         while True:
             observations, proprioceptive_state = self.env_interface.step(actions)
-
-            if self.show_sensor_output:
-                is_saccade_on_image_data_loader = isinstance(
-                    self.env_interface, SaccadeOnImageInterface
-                )
-                self.live_plotter.show_observations(
-                    *self.live_plotter.hardcoded_assumptions(observations, self.model),
-                    step,
-                    is_saccade_on_image_data_loader,
-                )
 
             if self.model.check_reached_max_matching_steps(self.max_steps):
                 logger.info(
@@ -156,6 +148,18 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
                 #       alone.
                 self.model.set_is_done()
                 return step
+
+            # Plot after the Monty step so the attention grid reflects this step's
+            # region merge (including any LM inhibit already held on propose_region).
+            if self.show_sensor_output:
+                is_saccade_on_image_data_loader = isinstance(
+                    self.env_interface, SaccadeOnImageInterface
+                )
+                self.live_plotter.show_observations(
+                    *self.live_plotter.hardcoded_assumptions(observations, self.model),
+                    step,
+                    is_saccade_on_image_data_loader,
+                )
 
             if self.model.is_done:
                 # Check this right after step to avoid setting time out
