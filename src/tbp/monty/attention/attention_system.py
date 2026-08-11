@@ -157,11 +157,19 @@ class AttentionSystem:
         covoxel_points = voxelize_and_bin_points(
             np.asarray([aw.location for aw in attention_weights]), self._voxel_size
         )
-        weights = []
-        for indices in covoxel_points.values():
-            weights.append(np.mean([attention_weights[i].weight for i in indices]))
 
         index = pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS)
+        # Both columns must carry the voxel index explicitly: `counts` comes out
+        # of a groupby, which sorts the index, so a bare list here would be
+        # assigned positionally to the wrong voxels.
+        weights = pd.Series(
+            [
+                np.mean([attention_weights[i].weight for i in indices])
+                for indices in covoxel_points.values()
+            ],
+            index=index,
+            dtype=float,
+        )
         counts = (
             pd.Series(1, index=index, dtype=np.int32)
             .groupby(level=list(VOXEL_LEVELS))
