@@ -24,7 +24,6 @@ def empty_voxel_grid() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "weight": pd.Series(dtype=np.int32),
-            "count": pd.Series(dtype=np.int32),
         },
         index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
     )
@@ -170,16 +169,9 @@ class AttentionSystem:
             index=index,
             dtype=float,
         )
-        counts = (
-            pd.Series(1, index=index, dtype=np.int32)
-            .groupby(level=list(VOXEL_LEVELS))
-            .sum()
-            .astype(np.int32)
-        )
         return pd.DataFrame(
             {
                 "weight": weights,
-                "count": counts,
             }
         )
 
@@ -229,10 +221,6 @@ class AttentionSystem:
                 .clip(-np.inf, self._voxel_lifetime)
                 .astype(np.int32)
             )
-            fresh.loc[seen_before, "count"] = (
-                fresh.loc[seen_before, "count"].to_numpy()
-                + remembered.loc[seen_before, "count"].to_numpy()
-            ).astype(np.int32)
 
         # The fresh row wins outright, so drop the stale one it replaces.
         carried = remembered.drop(index=fresh.index, errors="ignore")
