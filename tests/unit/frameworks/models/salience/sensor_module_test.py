@@ -232,10 +232,10 @@ class SalienceSMRegionTest(unittest.TestCase):
         # the segmentation.
         self.assertEqual(locations, [[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]])
 
-    def test_region_goals_carry_the_weighted_salience(self) -> None:
+    def test_region_weights_carry_the_weighted_salience(self) -> None:
         self.step()
         region = self.sensor_module.propose_region()
-        self.assertEqual([g.confidence for g in region], [0.1, 0.9])
+        self.assertEqual([aw.weight for aw in region], [0.1, 0.9])
 
     def test_segmentation_strategy_receives_the_observation(self) -> None:
         self.step()

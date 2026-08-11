@@ -13,7 +13,7 @@ import unittest
 import numpy as np
 
 from tbp.monty.attention.attention_system import AttentionSystem
-from tbp.monty.cmp import Goal
+from tbp.monty.cmp import AttentionWeight, Goal
 
 # Two points inside one voxel, and a third far enough away to occupy its own.
 NEAR_POINTS = ([0.0, 0, 0], [0.005, 0, 0])
@@ -42,14 +42,30 @@ def goal_at(location) -> Goal:
     )
 
 
-def region(*locations) -> list[Goal]:
+def attention_weight_at(location) -> AttentionWeight:
+    """Build an attention weight at the given location.
+
+    Returns:
+        An attention weight whose only meaningful property here is its
+        location.
+
+    """
+    return AttentionWeight(
+        location=None if location is None else np.asarray(location, dtype=float),
+        weight=1.0,
+        sender_id="SM_0",
+        sender_type="SM",
+    )
+
+
+def region(*locations) -> list[AttentionWeight]:
     """Build a region from the given locations.
 
     Returns:
-        One region: a list with one goal per location.
+        One region: a list with one attention weight per location.
 
     """
-    return [goal_at(location) for location in locations]
+    return [attention_weight_at(location) for location in locations]
 
 
 def column_by_voxel(
@@ -66,14 +82,14 @@ def column_by_voxel(
     return dict(zip(voxels, data[column].to_numpy().ravel().tolist()))
 
 
-def ages_by_voxel(system: AttentionSystem) -> dict[tuple[int, int, int], int]:
-    """Map each occupied voxel to its remaining age.
+def weights_by_voxel(system: AttentionSystem) -> dict[tuple[int, int, int], int]:
+    """Map each occupied voxel to its remaining weight.
 
     Returns:
-        Voxel coordinate to age, for every voxel the system holds.
+        Voxel coordinate to weight, for every voxel the system holds.
 
     """
-    return column_by_voxel(system, "age")
+    return column_by_voxel(system, "weight")
 
 
 def counts_by_voxel(system: AttentionSystem) -> dict[tuple[int, int, int], int]:
@@ -102,21 +118,21 @@ class AttentionSystemGridTest(unittest.TestCase):
         self.system.step([], [[], []])
         self.assertEqual(len(self.system.grid), 0)
 
-    def test_goals_without_a_location_are_not_voxelized(self) -> None:
-        self.system.step([], [[goal_at(None)]])
+    def test_attention_weights_without_a_location_are_not_voxelized(self) -> None:
+        self.system.step([], [[attention_weight_at(None)]])
         self.assertEqual(len(self.system.grid), 0)
 
     def test_a_step_adds_to_the_grid_rather_than_replacing_it(self) -> None:
         self.system.step([], [region(*NEAR_POINTS)])
         self.system.step([], [region(FAR_POINT)])
         self.assertEqual(
-            sorted(ages_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
+            sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
         )
 
     def test_regions_from_different_modules_merge_into_one_grid(self) -> None:
         self.system.step([], [region(*NEAR_POINTS), region(FAR_POINT)])
         self.assertEqual(
-            sorted(ages_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
+            sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
         )
 
     def test_reset_discards_the_grid(self) -> None:
@@ -125,8 +141,8 @@ class AttentionSystemGridTest(unittest.TestCase):
         self.assertEqual(len(self.system.grid), 0)
 
 
-class AttentionSystemAgeTest(unittest.TestCase):
-    """Voxels persist across steps, ageing until they are re-observed or expire."""
+class AttentionSystemWeightTest(unittest.TestCase):
+    """Voxels persist across steps, decaying until they are re-observed or expire."""
 
     def setUp(self) -> None:
         self.system = AttentionSystem(voxel_size=0.01, voxel_lifetime=3)
@@ -139,13 +155,13 @@ class AttentionSystemAgeTest(unittest.TestCase):
         """Observe the far voxel."""
         self.system.step([], [region(FAR_POINT)])
 
-    def test_age_starts_at_the_full_lifetime(self) -> None:
+    def test_weight_starts_at_the_full_lifetime(self) -> None:
         self.observe_near()
-        self.assertEqual(ages_by_voxel(self.system)[NEAR_VOXEL], 3)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 3)
 
-    def test_age_is_stored_as_an_integer(self) -> None:
+    def test_weight_is_stored_as_an_integer(self) -> None:
         self.observe_near()
-        self.assertEqual(self.system.grid["age"].to_numpy().dtype, np.int32)
+        self.assertEqual(self.system.grid["weight"].to_numpy().dtype, np.int32)
 
     def test_voxel_lifetime_is_exposed(self) -> None:
         self.assertEqual(AttentionSystem(voxel_lifetime=9).voxel_lifetime, 9)
@@ -158,29 +174,29 @@ class AttentionSystemAgeTest(unittest.TestCase):
     def test_an_unobserved_voxel_is_remembered(self) -> None:
         self.observe_near()
         self.observe_far()
-        self.assertEqual(set(ages_by_voxel(self.system)), {NEAR_VOXEL, FAR_VOXEL})
+        self.assertEqual(set(weights_by_voxel(self.system)), {NEAR_VOXEL, FAR_VOXEL})
 
-    def test_an_unobserved_voxel_ages_by_one_step(self) -> None:
+    def test_an_unobserved_voxel_decays_by_one_step(self) -> None:
         self.observe_near()
         self.observe_far()
-        self.assertEqual(ages_by_voxel(self.system)[NEAR_VOXEL], 2)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2)
 
-    def test_a_re_observed_voxel_returns_to_a_full_age(self) -> None:
+    def test_a_re_observed_voxel_returns_to_a_full_weight(self) -> None:
         self.observe_near()
         self.observe_far()
         self.observe_near()
-        self.assertEqual(ages_by_voxel(self.system)[NEAR_VOXEL], 3)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 3)
 
     def test_a_voxel_expires_after_its_lifetime_of_steps(self) -> None:
         self.observe_near()
         for _ in range(3):
             self.observe_far()
-        self.assertEqual(set(ages_by_voxel(self.system)), {FAR_VOXEL})
+        self.assertEqual(set(weights_by_voxel(self.system)), {FAR_VOXEL})
 
-    def test_observing_nothing_still_ages_the_grid(self) -> None:
+    def test_observing_nothing_still_decays_the_grid(self) -> None:
         self.observe_near()
         self.system.step([], [])
-        self.assertEqual(ages_by_voxel(self.system)[NEAR_VOXEL], 2)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2)
 
     def test_the_grid_empties_once_everything_expires(self) -> None:
         self.observe_near()
@@ -188,10 +204,10 @@ class AttentionSystemAgeTest(unittest.TestCase):
             self.system.step([], [])
         self.assertEqual(len(self.system.grid), 0)
 
-    def test_age_stays_an_integer_across_steps(self) -> None:
+    def test_weight_stays_an_integer_across_steps(self) -> None:
         self.observe_near()
         self.observe_far()
-        self.assertEqual(self.system.grid["age"].to_numpy().dtype, np.int32)
+        self.assertEqual(self.system.grid["weight"].to_numpy().dtype, np.int32)
 
 
 class AttentionSystemCountTest(unittest.TestCase):
@@ -325,5 +341,5 @@ class AttentionSystemFilterTest(unittest.TestCase):
         goal = goal_at(NEAR_POINTS[0])
         for _ in range(2):
             self.system.step([], [region(FAR_POINT)])
-        # This step ages the near voxel past its lifetime before filtering.
+        # This step decays the near voxel past its lifetime before filtering.
         self.assertEqual(self.system.step([goal], [region(FAR_POINT)]), [])

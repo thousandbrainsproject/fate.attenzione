@@ -183,7 +183,7 @@ class SalienceSM(SensorModule):
         return segmentation_map, [
             AttentionWeight(
                 location=surface_locations[i],
-                weight=1,
+                weight=surface_salience[i],
                 sender_id=self._sensor_module_id,
                 sender_type="SM",
             )

@@ -53,17 +53,17 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
         np.testing.assert_array_equal(
             snapshot["voxels"], [[0, 0, 0], [50, 0, 0]]
         )
-        np.testing.assert_array_equal(snapshot["age"], [2, 2])
+        np.testing.assert_array_equal(snapshot["weight"], [2, 2])
         np.testing.assert_array_equal(snapshot["count"], [2, 1])
 
     def test_an_empty_grid_snapshot_is_exported_empty(self) -> None:
         self.system.step([], [region(NEAR_POINT)])
-        # Two empty steps age the voxel past its lifetime of 2.
+        # Two empty steps decay the voxel past its lifetime of 2.
         self.system.step([], [])
         self.system.step([], [])
         snapshot = self.system.state_dict()["voxel_grids"][2]
         self.assertEqual(len(snapshot["voxels"]), 0)
-        self.assertEqual(len(snapshot["age"]), 0)
+        self.assertEqual(len(snapshot["weight"]), 0)
 
     def test_state_dict_is_json_encodable(self) -> None:
         self.system.step([], [region(NEAR_POINT)])
