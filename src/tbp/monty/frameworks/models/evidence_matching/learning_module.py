@@ -1150,6 +1150,26 @@ class EvidenceGraphLM(GraphLM):
             object_location_rel_body=mlh["location"],
             object_rotation=mlh["rotation"],
         )
+        if len(translated) == 0:
+            return []
+
+        # Inhibit the recognized object's bounding box, padded so that pose
+        # error does not leave an attended sliver at the object's edge.
+        pad = 0.05  # meters
+        # Sample the box no coarser than the attention system's voxel edge:
+        # consecutive samples then land in adjacent voxels, so no voxel inside
+        # the box escapes inhibition.
+        spacing = 0.005  # meters
+
+        translated = np.asarray(translated)
+        low = translated.min(axis=0) - pad
+        high = translated.max(axis=0) + pad
+        # linspace over a computed count includes both faces of the box and
+        # keeps the effective spacing at or below the target.
+        counts = np.ceil((high - low) / spacing).astype(int) + 1
+        axes = [np.linspace(lo, hi, n) for lo, hi, n in zip(low, high, counts)]
+        grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+
         return [
             AttentionWeight(
                 location=loc,
@@ -1157,7 +1177,7 @@ class EvidenceGraphLM(GraphLM):
                 sender_id=self.learning_module_id,
                 sender_type="LM",
             )
-            for loc in translated
+            for loc in grid
         ]
 
     def _object_pose_to_features(self, pose):
