@@ -19,7 +19,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 
-from tbp.monty.cmp import Message
+from tbp.monty.cmp import AttentionWeight, Message
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
 from tbp.monty.frameworks.models.evidence_matching.graph_memory import (
@@ -232,6 +232,8 @@ class EvidenceGraphLM(GraphLM):
     # used for symmetry checks.
     _hypotheses: dict[str, Hypotheses]
 
+    _attention_region: list[AttentionWeight]
+
     def __init__(
         self,
         max_match_distance,
@@ -322,6 +324,7 @@ class EvidenceGraphLM(GraphLM):
         self.hypotheses_updater = hypotheses_updater_class(**hypotheses_updater_args)
         self.hypotheses_updater_telemetry: HypothesesUpdaterTelemetry = {}
 
+        self._attention_region = []
         # TODO: make this part of `__init__()` after `reset_stm()` is removed.
         self._init_EvidenceGraphLM()
 
@@ -473,6 +476,9 @@ class EvidenceGraphLM(GraphLM):
                 "sensed_pose_rel_body": sensed_pose,
             }
         return vote
+
+    def propose_region(self) -> list[AttentionWeight]:
+        return self._attention_region
 
     def get_output(self) -> Message | None:
         """Return the most likely hypothesis in same format as LM input.
@@ -1079,11 +1085,71 @@ class EvidenceGraphLM(GraphLM):
         Returns:
             Terminal state of the LM.
         """
-        if len(self.get_possible_matches()) != 1:
+        possible_matches = self.get_possible_matches()
+        if len(possible_matches) != 1:
             # Clears the possible hypotheses by setting all hypotheses values to False.
             for hyp in self._hypotheses.values():
                 hyp.possible[:] = False
-        return super().update_terminal_condition()
+        
+        self._attention_region = []
+        # no possible matches
+        if len(possible_matches) == 0:
+            # self.set_individual_ts("no_match")
+            if (
+                self.buffer.get_num_observations_on_object() > 0
+            ):  # lm has gotten input during episode
+                self.buffer.stats["detected_location_rel_body"] = (
+                    self.buffer.get_current_location(input_channel="first")
+                )
+        # 1 possible match
+        elif (
+            (
+                self.buffer.get_num_observations_on_object() > 0
+            )  # had observations on object
+            and len(possible_matches) == 1  # We have it narrowed down to 1 object
+        ):
+            object_id = possible_matches[0]
+            pose = self.get_unique_pose_if_available(object_id)
+            if pose is None:  # No pose determined yet
+                # if self.terminal_state == "match":
+                #     self.set_individual_ts(None)
+                logger.info(f"Pose for {self.learning_module_id} not narrowed down yet")
+            else:
+                # self.set_individual_ts("match")
+                logger.info(f"{self.learning_module_id} recognized object {object_id}")
+                # Inhibit object region to move on
+                self._attention_region = self._inhibit_object_region(object_id)
+        # > 1 possible match
+        else:
+            # if self.terminal_state == "match":
+                # self.set_individual_ts(None)
+            logger.info(f"{self.learning_module_id} did not recognize an object yet.")
+        return self.terminal_state
+
+    def _inhibit_object_region(self, object_id: int) -> list[AttentionWeight]:
+        """Inhibit the object region to move on.
+
+        Returns:
+            The inhibited object region.
+        """
+        logging.info(f"Inhibiting object region for {object_id}")
+        # get graph locations for object id
+        graph_locations = self.graph_memory.get_locations_in_graph(object_id, "first")
+
+        mlh = self.get_mlh_for_object(object_id)
+        logging.info(f"MLH for {object_id}: {mlh}")
+        centered = graph_locations - graph_locations.mean(axis=0)
+        rotated = mlh["rotation"].inv().apply(centered)
+        translated = rotated + mlh["location"]
+        return [
+            AttentionWeight(
+                location=loc,
+                weight=-np.inf,
+                sender_id=self.learning_module_id,
+                sender_type="LM",
+            )
+            for loc in translated
+        ]
 
     def _object_pose_to_features(self, pose):
         """Turn object rotation into pose feature like vectors.
