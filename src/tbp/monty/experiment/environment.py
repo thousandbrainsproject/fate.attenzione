@@ -702,7 +702,7 @@ class FateAttenzioneInterface(Interface):
 
         primary_target = self.env.add_object(
             name="potted_meat_can",
-            position=np.array([0, 1.5, 0.1]),
+            position=np.array([0, 1.5, 0.08]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
         self.primary_target = {
