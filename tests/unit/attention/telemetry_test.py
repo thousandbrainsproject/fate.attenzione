@@ -31,24 +31,24 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
         )
 
     def test_each_step_records_a_snapshot(self) -> None:
-        self.system.step([], [region(NEAR_POINT)])
-        self.system.step([], [region(FAR_POINT)])
+        self.system.step([], [region(NEAR_POINT, weight=2.0)])
+        self.system.step([], [region(FAR_POINT, weight=2.0)])
         self.assertEqual(len(self.telemetry.voxel_grids), 2)
 
     def test_a_snapshot_is_unaffected_by_later_steps(self) -> None:
-        self.system.step([], [region(NEAR_POINT)])
-        self.system.step([], [region(FAR_POINT)])
+        self.system.step([], [region(NEAR_POINT, weight=2.0)])
+        self.system.step([], [region(FAR_POINT, weight=2.0)])
         self.assertEqual(len(self.telemetry.voxel_grids[0]), 1)
         self.assertEqual(len(self.telemetry.voxel_grids[1]), 2)
 
     def test_reset_discards_the_snapshots(self) -> None:
-        self.system.step([], [region(NEAR_POINT)])
+        self.system.step([], [region(NEAR_POINT, weight=2.0)])
         self.system.reset()
         self.assertEqual(len(self.telemetry.voxel_grids), 0)
 
     def test_state_dict_flattens_each_snapshot_into_arrays(self) -> None:
-        self.system.step([], [region(NEAR_POINT)])
-        self.system.step([], [region(NEAR_POINT, FAR_POINT)])
+        self.system.step([], [region(NEAR_POINT, weight=2.0)])
+        self.system.step([], [region(NEAR_POINT, FAR_POINT, weight=2.0)])
         snapshot = self.system.state_dict()["voxel_grids"][1]
         np.testing.assert_array_equal(
             snapshot["voxels"], [[0, 0, 0], [50, 0, 0]]
@@ -57,7 +57,7 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
         np.testing.assert_array_equal(snapshot["count"], [2, 1])
 
     def test_an_empty_grid_snapshot_is_exported_empty(self) -> None:
-        self.system.step([], [region(NEAR_POINT)])
+        self.system.step([], [region(NEAR_POINT, weight=2.0)])
         # Two empty steps decay the voxel past its lifetime of 2.
         self.system.step([], [])
         self.system.step([], [])
@@ -66,7 +66,7 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
         self.assertEqual(len(snapshot["weight"]), 0)
 
     def test_state_dict_is_json_encodable(self) -> None:
-        self.system.step([], [region(NEAR_POINT)])
+        self.system.step([], [region(NEAR_POINT, weight=2.0)])
         self.system.step([], [])
         encoded = json.loads(
             json.dumps(self.system.state_dict(), cls=BufferEncoder)
@@ -75,7 +75,7 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
 
     def test_a_default_telemetry_is_created_when_none_is_supplied(self) -> None:
         system = AttentionSystem(voxel_size=0.01)
-        system.step([], [region(NEAR_POINT)])
+        system.step([], [region(NEAR_POINT, weight=2.0)])
         self.assertEqual(len(system.state_dict()["voxel_grids"]), 1)
 
     def test_state_dict_carries_the_grid_geometry(self) -> None:

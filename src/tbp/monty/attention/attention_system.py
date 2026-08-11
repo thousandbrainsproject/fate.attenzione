@@ -8,6 +8,7 @@
 # https://opensource.org/licenses/MIT.
 from __future__ import annotations
 
+import copy
 from typing import Sequence
 
 import numpy as np
@@ -23,7 +24,9 @@ from tbp.monty.memento import Memento
 def empty_voxel_grid() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "weight": pd.Series(dtype=np.int32),
+            # Weights are signed: positive attracts, negative repels. Means of
+            # mixed proposals are fractional, so the column is a float.
+            "weight": pd.Series(dtype=float),
             "count": pd.Series(dtype=np.int32),
         },
         index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
@@ -31,21 +34,26 @@ def empty_voxel_grid() -> pd.DataFrame:
 
 INITIAL_WEIGHT = 6
 
+DEFAULT_VOXEL_SIZE = 0.005
+
 class AttentionSystem:
-    """Persisteng, LM and SM informed global attention space.
+    """Persistent, LM and SM informed global attention space.
 
-    Each step, sensor and learning modules propose regions in space as a set of
-    locations. Those locations are voxelized into voxels which are used to update
-    a persistent voxel grid.
+    Each step, sensor and learning modules propose regions in space as sets of
+    signed attention weights. Those weights are voxelized into a persistent
+    voxel grid: positive weights mark space as attractive, negative weights
+    (e.g. an LM inhibiting a recognized object) mark it as repulsive. Weights
+    decay toward zero by one step per tick and a voxel expires when its weight
+    reaches zero.
 
-    At present, the voxel grid is used to filter out goals that do not fall within
-    the voxel grid. Voxels that have not been re-proposed for a number of steps
-    (i.e., the voxel_lifetime) are expired from the grid.
+    The grid does not filter goals; it re-weights them. A goal's confidence is
+    scaled up in positively-weighted voxels, scaled down in negatively-weighted
+    voxels, and left unchanged where the grid holds no voxel.
     """
 
     def __init__(
         self,
-        voxel_size: float = 0.005,
+        voxel_size: float = DEFAULT_VOXEL_SIZE,
         voxel_lifetime: int = INITIAL_WEIGHT,
         telemetry: AttentionSystemTelemetry | None = None,
     ):
@@ -54,7 +62,8 @@ class AttentionSystem:
         Args:
             voxel_size: Edge length of a voxel, in meters.
             voxel_lifetime: How many steps a voxel survives without being
-                re-proposed.
+                re-proposed. Also the cap on a voxel's weight magnitude, so a
+                weight of ``+/-voxel_lifetime`` is full attraction/repulsion.
             telemetry: Telemetry storage for the attention system.
 
         Raises:
@@ -87,15 +96,15 @@ class AttentionSystem:
     def step(
         self, goals: list[Goal], regions: list[list[AttentionWeight]]
     ) -> list[Goal]:
-        """Update the attention system with new regions and filter goals.
+        """Update the attention system with new regions and re-weight goals.
 
         Args:
-            goals: SM- and LM-derived goals to filter.
+            goals: SM- and LM-derived goals to re-weight.
             regions: SM- and LM-derived regions which are used to update the
                 attention system's persistent voxel grid.
 
         Returns:
-            Filtered list of goals.
+            The goals, with confidences modulated by the voxels they fall in.
         """
         proposed = self._voxelize_regions(regions)
         # Decay what is already held before folding in what was just proposed, so
@@ -105,9 +114,9 @@ class AttentionSystem:
         merged = self._merge(decayed, proposed)
         self._voxel_grid = self._expire(merged)
         self._telemetry.voxel_grid(self._voxel_grid)
-        filtered = self._filter(goals)
-        self._telemetry.goal_filtering(goals, filtered)
-        return filtered
+        weighted = self._weigh(goals)
+        self._telemetry.goal_filtering(goals, weighted)
+        return weighted
 
     def contains_points(
         self,
@@ -131,6 +140,28 @@ class AttentionSystem:
         query = pd.MultiIndex.from_arrays(indices.T, names=VOXEL_LEVELS)
         return query.isin(occupied)
 
+    def weights_at_points(
+        self,
+        points: npt.NDArray[np.floating],
+    ) -> npt.NDArray[np.floating]:
+        """Look up the voxel weight at each location.
+
+        Args:
+            points: a (N, 3) array of points.
+
+        Returns:
+            A (N,) array of weights; 0 for points outside any held voxel.
+        """
+        points = np.atleast_2d(points)
+        if len(self._voxel_grid) == 0:
+            return np.zeros(len(points))
+
+        indices = np.floor(points / self._voxel_size).astype(int)
+        query = pd.MultiIndex.from_arrays(indices.T, names=VOXEL_LEVELS)
+        return (
+            self._voxel_grid["weight"].reindex(query, fill_value=0.0).to_numpy()
+        )
+
     def reset(self) -> None:
         """Discard the current grid and recorded telemetry."""
         self._voxel_grid = empty_voxel_grid()
@@ -147,35 +178,39 @@ class AttentionSystem:
         """Voxelize this step's regions into a fresh grid.
 
         Args:
-            regions: A list of regions, where each region is a list of goals.
+            regions: A list of regions, where each region is a list of
+                attention weights.
 
         Returns:
             The grid built from this step's regions alone.
 
         """
-        attention_weights = [aw for region in regions for aw in region]
+        attention_weights = [
+            aw for region in regions for aw in region if aw.location is not None
+        ]
+        if not attention_weights:
+            return empty_voxel_grid()
+
         covoxel_points = voxelize_and_bin_points(
             np.asarray([aw.location for aw in attention_weights]), self._voxel_size
         )
 
         index = pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS)
-        # Both columns must carry the voxel index explicitly: `counts` comes out
-        # of a groupby, which sorts the index, so a bare list here would be
-        # assigned positionally to the wrong voxels.
+        # Both columns carry the voxel index explicitly so that pandas aligns
+        # them by voxel rather than by position.
         weights = pd.Series(
             [
-                np.mean([attention_weights[i].weight for i in indices])
+                self._combine_weights(
+                    [attention_weights[i].weight for i in indices]
+                )
                 for indices in covoxel_points.values()
             ],
             index=index,
             dtype=float,
-        )
-        counts = (
-            pd.Series(1, index=index, dtype=np.int32)
-            .groupby(level=list(VOXEL_LEVELS))
-            .sum()
-            .astype(np.int32)
-        )
+        ).clip(-self._voxel_lifetime, self._voxel_lifetime)
+        # Count counts steps: one sighting per voxel per step, accumulated
+        # across steps in _merge.
+        counts = pd.Series(1, index=index, dtype=np.int32)
         return pd.DataFrame(
             {
                 "weight": weights,
@@ -183,23 +218,48 @@ class AttentionSystem:
             }
         )
 
+    @staticmethod
+    def _combine_weights(weights: Sequence[float]) -> float:
+        """Combine one voxel's proposed weights into a single weight.
+
+        Inhibition wins: if any proposal is negative, the voxel's weight is the
+        mean of the negative proposals, no matter how many positive proposals
+        share the voxel. Otherwise it is the mean of the (positive) proposals.
+        This keeps a sparse inhibitory region (e.g. one LM point per voxel)
+        from being outvoted by a dense excitatory one (e.g. one SM point per
+        pixel).
+
+        Args:
+            weights: The weights proposed for one voxel this step.
+
+        Returns:
+            The combined weight.
+        """
+        values = np.asarray(weights, dtype=float)
+        negative = values[values < 0]
+        if len(negative):
+            return float(negative.mean())
+        return float(values.mean())
+
     def _decay(self, remembered: pd.DataFrame) -> pd.DataFrame:
         """Tick every held voxel one step closer to expiring.
+
+        Weights decay toward zero from either sign, so repulsion wears off the
+        same way attraction does.
 
         Args:
             remembered: The voxels held going into this step.
 
         Returns:
-            The frame with every weight decremented by one.
+            The frame with every weight moved one step toward zero.
 
         """
         if len(remembered) == 0:
             return remembered
 
         decayed = remembered.copy()
-        # Subtracting through the frame would widen the dtype, so write back the
-        # declared one: weight is meant to stay an integer count of steps.
-        decayed["weight"] = (decayed["weight"] - 1).astype(np.int32)
+        weight = decayed["weight"].to_numpy()
+        decayed["weight"] = np.sign(weight) * np.maximum(np.abs(weight) - 1.0, 0.0)
         return decayed
 
     def _merge(self, remembered: pd.DataFrame, proposed: pd.DataFrame) -> pd.DataFrame:
@@ -221,13 +281,11 @@ class AttentionSystem:
         fresh = proposed.copy()
         seen_before = fresh.index.intersection(remembered.index)
         if len(seen_before):
-            fresh.loc[seen_before, "weight"] = (
-                (
-                    fresh.loc[seen_before, "weight"].to_numpy()
-                    + remembered.loc[seen_before, "weight"].to_numpy()
-                )
-                .clip(-np.inf, self._voxel_lifetime)
-                .astype(np.int32)
+            fresh.loc[seen_before, "weight"] = np.clip(
+                fresh.loc[seen_before, "weight"].to_numpy()
+                + remembered.loc[seen_before, "weight"].to_numpy(),
+                -self._voxel_lifetime,
+                self._voxel_lifetime,
             )
             fresh.loc[seen_before, "count"] = (
                 fresh.loc[seen_before, "count"].to_numpy()
@@ -242,10 +300,10 @@ class AttentionSystem:
 
     @staticmethod
     def _expire(data: pd.DataFrame) -> pd.DataFrame:
-        """Drop voxels that haven't been seen in a while.
+        """Drop voxels whose weight has decayed to zero.
 
         Args:
-            data: A merged frame, possibly holding voxels decayed past their end.
+            data: A merged frame, possibly holding voxels decayed to zero.
 
         Returns:
             The frame with expired rows removed.
@@ -253,17 +311,29 @@ class AttentionSystem:
         """
         if len(data) == 0:
             return data
-        return data[data["weight"].to_numpy() > 0]
+        return data[data["weight"].to_numpy() != 0]
 
-    def _filter(self, goals: Sequence[Goal]) -> list[Goal]:
-        """Keep the goals that live in the updated grid.
+    def _weigh(self, goals: Sequence[Goal]) -> list[Goal]:
+        """Modulate each goal's confidence by the voxel it falls in.
+
+        For a goal in a voxel of weight w, with n = w / voxel_lifetime in
+        [-1, 1]:
+
+        * Repulsion (w < 0) multiplies confidence by ``1 + n``: full repulsion
+          zeroes it.
+        * Attraction (w > 0) scales the confidence's headroom:
+          ``conf + n * conf * (1 - conf)``. This boosts without saturating --
+          a plain multiplicative boost clips swathes of goals to exactly 1.0,
+          which erases the salience ranking the motor system selects by.
+        * A goal outside any held voxel (w == 0) is unchanged.
+
+        Goals without a location pass through unchanged.
 
         Args:
             goals: The goals collected from all modules this step.
 
         Returns:
-            The goals inside an occupied voxel, plus any without a location.
-            All goals, if the grid is empty.
+            The goals, with modulated confidences.
 
         """
         if len(self._voxel_grid) == 0:
@@ -274,7 +344,23 @@ class AttentionSystem:
         if not located:
             return unlocated
 
-        contained = self.contains_points(
+        weights = self.weights_at_points(
             np.asarray([g.location for g in located])
         )
-        return [g for g, keep in zip(located, contained) if keep] + unlocated
+        normalized = weights / self._voxel_lifetime
+        confidence = np.asarray([g.confidence for g in located])
+        boosted = confidence + (
+            np.maximum(normalized, 0.0) * confidence * (1.0 - confidence)
+        )
+        suppression = 1.0 + np.minimum(normalized, 0.0)
+        confidences = np.clip(boosted * suppression, 0.0, 1.0)
+
+        weighted = []
+        for goal, confidence in zip(located, confidences):
+            # Copy rather than mutate: the telemetry holds the incoming goals,
+            # and mutating them in place would rewrite the recorded
+            # pre-weighting confidences.
+            weighted_goal = copy.copy(goal)
+            weighted_goal.confidence = float(confidence)
+            weighted.append(weighted_goal)
+        return weighted + unlocated

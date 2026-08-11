@@ -19,6 +19,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 
+from tbp.monty.attention.attention_system import DEFAULT_VOXEL_SIZE, INITIAL_WEIGHT
 from tbp.monty.cmp import AttentionWeight, Message
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
@@ -39,7 +40,6 @@ from tbp.monty.frameworks.utils.graph_matching_utils import (
     add_pose_features_to_tolerances,
     get_scaled_evidences,
 )
-from tbp.monty.frameworks.utils.spatial_arithmetics import apply_rf_transform_to_points
 from tbp.monty.geometry import Rotation
 
 __all__ = ["EvidenceGraphLM", "InvalidEvidenceThresholdConfig"]
@@ -1142,13 +1142,15 @@ class EvidenceGraphLM(GraphLM):
 
         current_loc = self.buffer.get_current_location(input_channel="first")
 
-        # Abusing this function because time.
-        translated, _ = apply_rf_transform_to_points(
-            locations=graph_locations,
-            features=None,
-            location_rel_model=current_loc,
-            object_location_rel_body=mlh["location"],
-            object_rotation=mlh["rotation"],
+        # Map the model's points into the body frame: the inverse of the
+        # body->model mapping used during matching (see
+        # apply_rf_transform_to_points, which computes
+        # model = R.inv() @ (body - sensor_loc) + mlh_loc), anchored so the
+        # hypothesized model location lands at the sensor's current body-frame
+        # location. Both anchors track the sensor together, so the transformed
+        # object stays put as the sensor moves.
+        translated = (
+            mlh["rotation"].apply(graph_locations - mlh["location"]) + current_loc
         )
         if len(translated) == 0:
             return []
@@ -1159,7 +1161,7 @@ class EvidenceGraphLM(GraphLM):
         # Sample the box no coarser than the attention system's voxel edge:
         # consecutive samples then land in adjacent voxels, so no voxel inside
         # the box escapes inhibition.
-        spacing = 0.005  # meters
+        spacing = DEFAULT_VOXEL_SIZE
 
         translated = np.asarray(translated)
         low = translated.min(axis=0) - pad
@@ -1173,7 +1175,7 @@ class EvidenceGraphLM(GraphLM):
         return [
             AttentionWeight(
                 location=loc,
-                weight=-np.inf,
+                weight=-INITIAL_WEIGHT,
                 sender_id=self.learning_module_id,
                 sender_type="LM",
             )

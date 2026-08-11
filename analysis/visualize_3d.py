@@ -486,14 +486,21 @@ def create_segmentation_animation(
     region_bar = plt.colorbar(region_anchor, ax=ax_region, fraction=0.046, pad=0.08)
     region_bar.set_label("Salience", rotation=270, labelpad=15)
 
-    # Weight is bounded by the voxel lifetime, so its scale is known up front.
+    # Weight is signed and bounded by the voxel lifetime, so it gets a fixed
+    # diverging scale centered on zero (red = repulsion, blue = attraction).
     # Count grows without bound, so its scale widens as larger values turn up;
     # it only ever widens, so a colour means the same thing from one frame to
-    # the next.
-    if attention.feature in ("weight", "age") and attention.voxel_lifetime is not None:
+    # the next. Old "age" stats are unsigned, so they keep a sequential scale.
+    if attention.feature == "weight" and attention.voxel_lifetime is not None:
+        lifetime = float(attention.voxel_lifetime)
+        voxel_scale = {"vmin": -lifetime, "vmax": lifetime}
+        voxel_cmap = "RdBu"
+    elif attention.feature == "age" and attention.voxel_lifetime is not None:
         voxel_scale = {"vmin": 0.0, "vmax": float(attention.voxel_lifetime)}
+        voxel_cmap = "viridis"
     else:
         voxel_scale = {"vmin": 0.0, "vmax": 1.0}
+        voxel_cmap = "viridis"
 
     def voxel_limits(values: np.ndarray) -> tuple[float, float]:
         """Widen the voxel colour scale to admit ``values``.
@@ -514,7 +521,7 @@ def create_segmentation_animation(
             np.concatenate(all_values) if all_values else np.empty(0)
         )
         voxel_anchor = ax_voxels.scatter(
-            [], [], [], c=[], cmap="viridis", s=marker_size, alpha=0.8,
+            [], [], [], c=[], cmap=voxel_cmap, s=marker_size, alpha=0.8,
             vmin=vmin, vmax=vmax,
         )
         voxel_bar = plt.colorbar(voxel_anchor, ax=ax_voxels, fraction=0.046, pad=0.08)
@@ -618,7 +625,7 @@ def create_segmentation_animation(
                     centres[:, 1],
                     centres[:, 2],
                     c=values,
-                    cmap="viridis",
+                    cmap=voxel_cmap,
                     s=marker_size,
                     alpha=0.8,
                     vmin=vmin,
