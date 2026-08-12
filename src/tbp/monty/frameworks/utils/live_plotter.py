@@ -27,9 +27,7 @@ plt.ioff()
 #   patch_1  patch_2  patch_3
 #   patch_4  patch_0  patch_5
 #   patch_6  patch_7  patch_8
-_NINE_PATCH_IDS = tuple(
-    SensorID(f"patch_{i}") for i in (1, 2, 3, 4, 0, 5, 6, 7, 8)
-)
+_NINE_PATCH_IDS = tuple(SensorID(f"patch_{i}") for i in (1, 2, 3, 4, 0, 5, 6, 7, 8))
 
 # Voxel coordinates are lower corners; offset to centres for plotting.
 _VOXEL_CENTRE_OFFSET = 0.5
@@ -497,9 +495,7 @@ class LivePlotter:
             self._set_attention_limits(ax, bound_points, voxel_size)
             self._hide_3d_axes(ax)
 
-    def _set_attention_limits(
-        self, ax, points: np.ndarray, voxel_size: float
-    ) -> None:
+    def _set_attention_limits(self, ax, points: np.ndarray, voxel_size: float) -> None:
         """Keep a padded, monotonically growing view of the attention cloud."""
         mins = points.min(axis=0)
         maxs = points.max(axis=0)

@@ -1091,7 +1091,7 @@ class EvidenceGraphLM(GraphLM):
             # Clears the possible hypotheses by setting all hypotheses values to False.
             for hyp in self._hypotheses.values():
                 hyp.possible[:] = False
-        
+
         self._attention_region = []
         # no possible matches
         if len(possible_matches) == 0:
@@ -1123,7 +1123,7 @@ class EvidenceGraphLM(GraphLM):
         # > 1 possible match
         else:
             # if self.terminal_state == "match":
-                # self.set_individual_ts(None)
+            # self.set_individual_ts(None)
             logger.info(f"{self.learning_module_id} did not recognize an object yet.")
         return self.terminal_state
 

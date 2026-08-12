@@ -212,6 +212,7 @@ class Message:
             f"sender_type must be SM or LM but is {self.sender_type}"
         )
 
+
 class AttentionWeight(Message):
     """Attention weight assigning weight to a location.
 
@@ -242,6 +243,7 @@ class AttentionWeight(Message):
 
     def _check_all_attributes(self):
         pass
+
 
 def encode_attention_weight(attention_weight: AttentionWeight) -> dict[str, Any]:
     """Encode an attention weight into a dictionary.

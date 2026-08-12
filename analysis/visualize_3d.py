@@ -106,9 +106,7 @@ class SMTelemetry:
         for region in sm.get("regions", []):
             located = [aw for aw in region if aw.get("location") is not None]
             self.region_locations.append(
-                np.array(
-                    [aw["location"] for aw in located], dtype=float
-                ).reshape(-1, 3)
+                np.array([aw["location"] for aw in located], dtype=float).reshape(-1, 3)
             )
             # Regions are AttentionWeights carrying the salience in "weight";
             # stats recorded before the rename carried it in a Goal's
@@ -212,9 +210,7 @@ class AttentionTelemetry:
             self.centres.append(
                 (indices + VOXEL_CENTRE_OFFSET) * (self.voxel_size or 1.0)
             )
-            self.values.append(
-                np.asarray(grid.get(feature, []), dtype=float).ravel()
-            )
+            self.values.append(np.asarray(grid.get(feature, []), dtype=float).ravel())
 
     @property
     def has_grids(self) -> bool:
@@ -279,9 +275,7 @@ class LMEvidence:
 
         n_steps = len(all_evidences)
         self.n_hypotheses = np.zeros(n_steps, dtype=int)
-        self.max_evidences = {
-            name: np.zeros(n_steps) for name in sorted(object_names)
-        }
+        self.max_evidences = {name: np.zeros(n_steps) for name in sorted(object_names)}
         for step, evidences_t in enumerate(all_evidences):
             for obj_name, trace in self.max_evidences.items():
                 obj_t = evidences_t.get(obj_name, [])
@@ -337,8 +331,7 @@ class LMEvidence:
             return []
         step = min(step, self.n_steps - 1)
         pairs = [
-            (name, float(trace[step]))
-            for name, trace in self.max_evidences.items()
+            (name, float(trace[step])) for name, trace in self.max_evidences.items()
         ]
         pairs.sort(key=lambda pair: pair[1], reverse=True)
         return pairs
@@ -423,10 +416,7 @@ def create_segmentation_animation(
 
     n_frames = sm.n_frames
     if not attention.has_grids:
-        print(
-            "No attention telemetry in this episode - skipping the voxel grid "
-            "panel."
-        )
+        print("No attention telemetry in this episode - skipping the voxel grid panel.")
 
     xlim, ylim, zlim = _bounds(sm.bounds_points() + attention.bounds_points())
 
@@ -442,9 +432,7 @@ def create_segmentation_animation(
     ax_image = fig.add_subplot(grid[0, 0])
     ax_region = fig.add_subplot(grid[0, 1], projection="3d")
     ax_voxels = (
-        fig.add_subplot(grid[0, 2], projection="3d")
-        if attention.has_grids
-        else None
+        fig.add_subplot(grid[0, 2], projection="3d") if attention.has_grids else None
     )
     ax_evidence = fig.add_subplot(grid[1, 0]) if lm.has_evidence else None
     ax_table = fig.add_subplot(grid[1, 1]) if lm.has_evidence else None
@@ -514,8 +502,15 @@ def create_segmentation_animation(
             np.concatenate(all_values) if all_values else np.empty(0)
         )
         voxel_anchor = ax_voxels.scatter(
-            [], [], [], c=[], cmap="viridis", s=marker_size, alpha=0.8,
-            vmin=vmin, vmax=vmax,
+            [],
+            [],
+            [],
+            c=[],
+            cmap="viridis",
+            s=marker_size,
+            alpha=0.8,
+            vmin=vmin,
+            vmax=vmax,
         )
         voxel_bar = plt.colorbar(voxel_anchor, ax=ax_voxels, fraction=0.046, pad=0.08)
         voxel_bar.set_label(attention.feature, rotation=270, labelpad=15)
@@ -558,9 +553,7 @@ def create_segmentation_animation(
                     [], [], label=name, linewidth=1.5, color=OKABE_ITO[rank]
                 )
             else:
-                (line,) = ax_evidence.plot(
-                    [], [], color="0.8", linewidth=0.8, zorder=1
-                )
+                (line,) = ax_evidence.plot([], [], color="0.8", linewidth=0.8, zorder=1)
             evidence_lines[name] = line
         ax_evidence.legend(fontsize=7, loc="upper left")
 
@@ -599,13 +592,13 @@ def create_segmentation_animation(
                 vmax=1,
             )
             ax_region.set_title(
-                f"Proposed Region ({len(locations)} points, "
-                f"Step {step}/{n_frames - 1})"
+                f"Proposed Region ({len(locations)} points, Step {step}/{n_frames - 1})"
             )
         else:
             ax_region.set_title(f"Proposed Region (none, Step {step}/{n_frames - 1})")
-            ax_region.text2D(0.5, 0.5, "No region", transform=ax_region.transAxes,
-                             ha="center")
+            ax_region.text2D(
+                0.5, 0.5, "No region", transform=ax_region.transAxes, ha="center"
+            )
 
         if ax_voxels is not None:
             ax_voxels.clear()
@@ -628,8 +621,7 @@ def create_segmentation_animation(
                     # Keep the bar honest if the scale just widened.
                     voxel_bar.mappable.set_clim(vmin, vmax)
                 ax_voxels.set_title(
-                    f"Voxel Grid ({len(centres)} voxels, "
-                    f"Step {step}/{n_frames - 1})"
+                    f"Voxel Grid ({len(centres)} voxels, Step {step}/{n_frames - 1})"
                 )
             else:
                 ax_voxels.set_title(f"Voxel Grid (none, Step {step}/{n_frames - 1})")
@@ -679,14 +671,18 @@ def create_segmentation_animation(
                     table[row, 0].set_facecolor(mcolors.to_rgba(colour, alpha=0.3))
             else:
                 ax_table.text(
-                    0.5, 0.5, "No evidence yet",
-                    transform=ax_table.transAxes, ha="center",
+                    0.5,
+                    0.5,
+                    "No evidence yet",
+                    transform=ax_table.transAxes,
+                    ha="center",
                 )
 
         return [image]
 
-    anim = FuncAnimation(fig, update_frame, frames=n_frames, interval=interval,
-                         blit=True)
+    anim = FuncAnimation(
+        fig, update_frame, frames=n_frames, interval=interval, blit=True
+    )
 
     visualizations_dir = exp_dir / "visualizations"
     visualizations_dir.mkdir(parents=True, exist_ok=True)
@@ -727,9 +723,7 @@ def main() -> None:
     args = parser.parse_args()
 
     episodes = (
-        [args.episode]
-        if args.episode is not None
-        else available_episodes(args.exp_dir)
+        [args.episode] if args.episode is not None else available_episodes(args.exp_dir)
     )
     if not episodes:
         raise SystemExit(f"No detailed stats found under {args.exp_dir}")

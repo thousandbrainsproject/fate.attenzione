@@ -90,9 +90,7 @@ class SalienceSMTelemetryTest(unittest.TestCase):
     def test_state_dict_is_json_encodable(self) -> None:
         self.telemetry.record(self.mask, self.region)
         self.telemetry.record(None, [])
-        encoded = json.loads(
-            json.dumps(self.telemetry.state_dict(), cls=BufferEncoder)
-        )
+        encoded = json.loads(json.dumps(self.telemetry.state_dict(), cls=BufferEncoder))
         self.assertEqual(encoded["segmentation_maps"][0], [[1, 0], [0, 1]])
         self.assertIsNone(encoded["segmentation_maps"][1])
         self.assertEqual(len(encoded["regions"][0]), 2)

@@ -104,15 +104,11 @@ class AttentionSystemGridTest(unittest.TestCase):
         # Weight 2 so the near voxel survives the decay tick of the second step.
         self.system.step([], [region(*NEAR_POINTS, weight=2.0)])
         self.system.step([], [region(FAR_POINT)])
-        self.assertEqual(
-            sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
-        )
+        self.assertEqual(sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL])
 
     def test_regions_from_different_modules_merge_into_one_grid(self) -> None:
         self.system.step([], [region(*NEAR_POINTS), region(FAR_POINT)])
-        self.assertEqual(
-            sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
-        )
+        self.assertEqual(sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL])
 
     def test_reset_discards_the_grid(self) -> None:
         self.system.step([], [region(*NEAR_POINTS)])
@@ -251,17 +247,13 @@ class AttentionSystemFilterTest(unittest.TestCase):
     def test_only_goals_inside_the_grid_are_returned(self) -> None:
         inside = goal_at(NEAR_POINTS[0])
         outside = goal_at([9.0, 9, 9])
-        returned = self.system.step(
-            [inside, outside], [region(*NEAR_POINTS)]
-        )
+        returned = self.system.step([inside, outside], [region(*NEAR_POINTS)])
         self.assertEqual(returned, [inside])
 
     def test_goals_are_filtered_against_the_updated_grid(self) -> None:
         # The region arrives on the same step as the goal it admits.
         goal = goal_at(NEAR_POINTS[1])
-        self.assertEqual(
-            self.system.step([goal], [region(NEAR_POINTS[0])]), [goal]
-        )
+        self.assertEqual(self.system.step([goal], [region(NEAR_POINTS[0])]), [goal])
 
     def test_goals_pass_through_while_the_grid_is_empty(self) -> None:
         goals = [goal_at(NEAR_POINTS[0]), goal_at([9.0, 9, 9])]
@@ -288,6 +280,4 @@ class AttentionSystemFilterTest(unittest.TestCase):
         for _ in range(2):
             self.system.step([], [region(FAR_POINT, weight=3.0)])
         # This step decays the near voxel past its lifetime before filtering.
-        self.assertEqual(
-            self.system.step([goal], [region(FAR_POINT, weight=3.0)]), []
-        )
+        self.assertEqual(self.system.step([goal], [region(FAR_POINT, weight=3.0)]), [])

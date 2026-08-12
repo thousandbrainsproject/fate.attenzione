@@ -181,7 +181,7 @@ class MontyBase(Monty):
         observations: Observations,
         proprioceptive_state: ProprioceptiveState,
     ) -> None:
-        sensor_module_outputs = []
+        sensor_module_outputs: list[Message] = []
         for sensor_module in self.sensor_modules:
             raw_obs = self.get_observations(
                 observations, sensor_module.sensor_module_id
@@ -195,12 +195,20 @@ class MontyBase(Monty):
             sensor_module.update_state(agent_state)
             sm_output = sensor_module.step(ctx, raw_obs, self.is_motor_only_step)
             sensor_module_outputs.append(sm_output)
+        self.sensor_module_outputs = sensor_module_outputs
+
+        # The Attention System step
+        regions = [sm.propose_region() for sm in self.sensor_modules]
+        self._attention_system.update_regions(regions)
+        self.sensor_module_outputs = self._attention_system.filter_percepts(
+            sensor_module_outputs
+        )
+
         # Aggregate LM outputs here to be input to higher level LM at next step
         learning_module_outputs = []
         for learning_module in self.learning_modules:
             lm_out = learning_module.get_output()
             learning_module_outputs.append(lm_out)
-        self.sensor_module_outputs = sensor_module_outputs
         # TODO: Maybe combine the two?
         self.learning_module_outputs = learning_module_outputs
 
@@ -342,11 +350,10 @@ class MontyBase(Monty):
             goals = sm.propose_goals()
             self._goals.extend(goals)
 
-        # The attention system folds the proposed regions into its voxel grid and
-        # returns only the goals that fall within it.
+        # The Attention System step
         regions = [lm.propose_region() for lm in self.learning_modules]
-        regions.extend(sm.propose_region() for sm in self.sensor_modules)
-        self._goals = self._attention_system.step(self._goals, regions)
+        self._attention_system.update_regions(regions)
+        self._goals = self._attention_system.filter_goals(self._goals)
 
     def _step_motor_system(
         self,

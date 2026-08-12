@@ -17,7 +17,6 @@ __all__ = ["AttentionSystemTelemetry"]
 
 
 class AttentionSystemTelemetry:
-
     def __init__(self) -> None:
         self.voxel_grids: list[pd.DataFrame] = []
         self.pre_filter_goals: list[list[Goal]] = []

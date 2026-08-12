@@ -219,8 +219,7 @@ class SalienceSMRegionTest(unittest.TestCase):
             locations_map=self.locations_map,
         )
         with patch(
-            "tbp.monty.frameworks.models.salience.sensor_module."
-            "on_object_observation",
+            "tbp.monty.frameworks.models.salience.sensor_module.on_object_observation",
             return_value=on_object,
         ):
             self.sensor_module.step(self.ctx, self.observation)
@@ -236,9 +235,7 @@ class SalienceSMRegionTest(unittest.TestCase):
     def test_region_weights_are_the_initial_attention_weight(self) -> None:
         self.step()
         region = self.sensor_module.propose_region()
-        self.assertEqual(
-            [aw.weight for aw in region], [INITIAL_WEIGHT, INITIAL_WEIGHT]
-        )
+        self.assertEqual([aw.weight for aw in region], [INITIAL_WEIGHT, INITIAL_WEIGHT])
 
     def test_segmentation_strategy_receives_the_observation(self) -> None:
         self.step()
@@ -300,8 +297,7 @@ class SalienceSMTelemetryRecordingTest(unittest.TestCase):
             locations_map=self.locations_map,
         )
         with patch(
-            "tbp.monty.frameworks.models.salience.sensor_module."
-            "on_object_observation",
+            "tbp.monty.frameworks.models.salience.sensor_module.on_object_observation",
             return_value=on_object,
         ):
             self.sensor_module.step(self.ctx, self.observation)

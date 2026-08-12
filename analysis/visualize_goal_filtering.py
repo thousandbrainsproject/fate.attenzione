@@ -182,17 +182,26 @@ def create_goal_filtering_animation(
         # Pre first so the surviving goals draw on top of the red field.
         if len(pre):
             ax_goals.scatter(
-                pre[:, 0], pre[:, 1], pre[:, 2],
-                c=PRE_COLOR, s=marker_size, alpha=0.5, label="pre-filter",
+                pre[:, 0],
+                pre[:, 1],
+                pre[:, 2],
+                c=PRE_COLOR,
+                s=marker_size,
+                alpha=0.5,
+                label="pre-filter",
             )
         if len(post):
             ax_goals.scatter(
-                post[:, 0], post[:, 1], post[:, 2],
-                c=POST_COLOR, s=marker_size, alpha=0.8, label="post-filter",
+                post[:, 0],
+                post[:, 1],
+                post[:, 2],
+                c=POST_COLOR,
+                s=marker_size,
+                alpha=0.8,
+                label="post-filter",
             )
         ax_goals.set_title(
-            f"Goals ({len(pre)} pre, {len(post)} post, "
-            f"Step {step}/{n_frames - 1})"
+            f"Goals ({len(pre)} pre, {len(post)} post, Step {step}/{n_frames - 1})"
         )
         if len(pre) or len(post):
             ax_goals.legend(loc="upper right", fontsize=8)
@@ -203,8 +212,9 @@ def create_goal_filtering_animation(
 
         return [image]
 
-    anim = FuncAnimation(fig, update_frame, frames=n_frames, interval=interval,
-                         blit=True)
+    anim = FuncAnimation(
+        fig, update_frame, frames=n_frames, interval=interval, blit=True
+    )
 
     visualizations_dir = exp_dir / "visualizations"
     visualizations_dir.mkdir(parents=True, exist_ok=True)
@@ -238,9 +248,7 @@ def main() -> None:
     args = parser.parse_args()
 
     episodes = (
-        [args.episode]
-        if args.episode is not None
-        else available_episodes(args.exp_dir)
+        [args.episode] if args.episode is not None else available_episodes(args.exp_dir)
     )
     if not episodes:
         raise SystemExit(f"No detailed stats found under {args.exp_dir}")

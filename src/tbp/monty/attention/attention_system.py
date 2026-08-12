@@ -8,16 +8,17 @@
 # https://opensource.org/licenses/MIT.
 from __future__ import annotations
 
-from typing import Sequence
-
+import logging
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
 from tbp.monty.attention.telemetry import AttentionSystemTelemetry
 from tbp.monty.attention.voxels import VOXEL_LEVELS, voxelize_and_bin_points
-from tbp.monty.cmp import AttentionWeight, Goal
+from tbp.monty.cmp import AttentionWeight, Goal, Message
 from tbp.monty.memento import Memento
+
+logger = logging.getLogger(__name__)
 
 
 def empty_voxel_grid() -> pd.DataFrame:
@@ -28,7 +29,9 @@ def empty_voxel_grid() -> pd.DataFrame:
         index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
     )
 
-INITIAL_WEIGHT = 6
+
+INITIAL_WEIGHT = 12
+
 
 class AttentionSystem:
     """Persisteng, LM and SM informed global attention space.
@@ -63,9 +66,7 @@ class AttentionSystem:
             raise ValueError(f"voxel_lifetime must be >= 1, got {voxel_lifetime}")
         self._voxel_size = voxel_size
         self._voxel_lifetime = voxel_lifetime
-        self._telemetry = (
-            AttentionSystemTelemetry() if telemetry is None else telemetry
-        )
+        self._telemetry = AttentionSystemTelemetry() if telemetry is None else telemetry
         self._voxel_grid = empty_voxel_grid()
 
     @property
@@ -83,30 +84,65 @@ class AttentionSystem:
         """The voxel grid: (x, y, z) MultiIndex rows with weight/count columns."""
         return self._voxel_grid
 
-    def step(
-        self, goals: list[Goal], regions: list[list[AttentionWeight]]
-    ) -> list[Goal]:
-        """Update the attention system with new regions and filter goals.
+    def filter_percepts(self, percepts: list[Message | None]) -> list[Message | None]:
+        """Keep the percepts that live in the updated grid.
 
         Args:
-            goals: SM- and LM-derived goals to filter.
-            regions: SM- and LM-derived regions which are used to update the
-                attention system's persistent voxel grid.
+            percepts: The percepts collected from all modules this step.
 
         Returns:
-            Filtered list of goals.
+            The percepts inside an occupied voxel, plus any without a location.
+            All percepts, if the grid is empty.
         """
+        if len(self._voxel_grid) == 0:
+            return list(percepts)
+
+        indices = []
+        locations = []
+        for i, p in enumerate(percepts):
+            if p is None:
+                continue
+            indices.append(i)
+            locations.append(p.location)
+
+        locations = np.stack(locations)
+        contained = self.contains_points(locations)
+        for i, c in enumerate(contained):
+            if not c:
+                logger.info(f"Filtering out percept {percepts[indices[i]]}")
+                percepts[indices[i]].use_state = False
+        return percepts
+
+    def filter_goals(self, goals: list[Goal]) -> list[Goal]:
+        """Keep the goals that live in the updated grid.
+
+        Args:
+            goals: The goals collected from all modules this step.
+
+        Returns:
+            The goals inside an occupied voxel, plus any without a location.
+            All goals, if the grid is empty.
+        """
+        self._telemetry.voxel_grid(self._voxel_grid)
+
+        if len(self._voxel_grid) == 0:
+            return list(goals)
+
+        located = [g for g in goals if g.location is not None]
+        unlocated = [g for g in goals if g.location is None]
+        if not located:
+            return unlocated
+
+        contained = self.contains_points(np.asarray([g.location for g in located]))
+        filtered = [g for g, keep in zip(located, contained) if keep] + unlocated
+        self._telemetry.goal_filtering(goals, filtered)
+        return filtered
+
+    def update_regions(self, regions: list[list[AttentionWeight]]) -> None:
         proposed = self._voxelize_regions(regions)
-        # Decay what is already held before folding in what was just proposed, so
-        # that a re-proposed voxel's fresh row lands on top of the tick rather
-        # than after it.
         decayed = self._decay(self._voxel_grid)
         merged = self._merge(decayed, proposed)
         self._voxel_grid = self._expire(merged)
-        self._telemetry.voxel_grid(self._voxel_grid)
-        filtered = self._filter(goals)
-        self._telemetry.goal_filtering(goals, filtered)
-        return filtered
 
     def contains_points(
         self,
@@ -244,27 +280,3 @@ class AttentionSystem:
         if len(data) == 0:
             return data
         return data[data["weight"].to_numpy() > 0]
-
-    def _filter(self, goals: Sequence[Goal]) -> list[Goal]:
-        """Keep the goals that live in the updated grid.
-
-        Args:
-            goals: The goals collected from all modules this step.
-
-        Returns:
-            The goals inside an occupied voxel, plus any without a location.
-            All goals, if the grid is empty.
-
-        """
-        if len(self._voxel_grid) == 0:
-            return list(goals)
-
-        located = [g for g in goals if g.location is not None]
-        unlocated = [g for g in goals if g.location is None]
-        if not located:
-            return unlocated
-
-        contained = self.contains_points(
-            np.asarray([g.location for g in located])
-        )
-        return [g for g, keep in zip(located, contained) if keep] + unlocated

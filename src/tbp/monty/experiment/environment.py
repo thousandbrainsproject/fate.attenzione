@@ -678,6 +678,7 @@ class SaccadeOnImageFromStreamInterface(SaccadeOnImageInterface):
             "scale": [1.0, 1.0, 1.0],
         }
 
+
 class FateAttenzioneInterface(Interface):
     """Environment interface for FateAttenzione."""
 

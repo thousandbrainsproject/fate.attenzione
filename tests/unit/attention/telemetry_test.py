@@ -50,9 +50,7 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
         self.system.step([], [region(NEAR_POINT, weight=2.0)])
         self.system.step([], [region(NEAR_POINT, FAR_POINT, weight=2.0)])
         snapshot = self.system.state_dict()["voxel_grids"][1]
-        np.testing.assert_array_equal(
-            snapshot["voxels"], [[0, 0, 0], [50, 0, 0]]
-        )
+        np.testing.assert_array_equal(snapshot["voxels"], [[0, 0, 0], [50, 0, 0]])
         np.testing.assert_array_equal(snapshot["weight"], [2, 2])
 
     def test_an_empty_grid_snapshot_is_exported_empty(self) -> None:
@@ -67,9 +65,7 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
     def test_state_dict_is_json_encodable(self) -> None:
         self.system.step([], [region(NEAR_POINT, weight=2.0)])
         self.system.step([], [])
-        encoded = json.loads(
-            json.dumps(self.system.state_dict(), cls=BufferEncoder)
-        )
+        encoded = json.loads(json.dumps(self.system.state_dict(), cls=BufferEncoder))
         self.assertEqual(encoded["voxel_grids"][0]["voxels"], [[0, 0, 0]])
 
     def test_a_default_telemetry_is_created_when_none_is_supplied(self) -> None:
