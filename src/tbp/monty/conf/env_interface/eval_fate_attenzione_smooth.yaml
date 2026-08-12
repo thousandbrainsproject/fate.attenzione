@@ -1,0 +1,6 @@
+# @package experiment.config
+
+do_eval: true
+eval_env_interface_args:
+  pursuit: true
+eval_env_interface_class: ${monty.class:tbp.monty.experiment.environment.FateAttenzioneInterface}

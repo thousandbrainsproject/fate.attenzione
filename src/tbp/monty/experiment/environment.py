@@ -26,7 +26,6 @@ from tbp.monty.frameworks.environment_utils.transforms import (
 )
 from tbp.monty.frameworks.environments.environment import (
     ObjectID,
-    ObjectInfo,
     SemanticID,
     SimulatedObjectEnvironment,
 )
@@ -734,5 +733,31 @@ class FateAttenzioneInterface(Interface):
         self.env.add_object(
             name="spoon",
             position=np.array([-0.02, 1.4, 0.08]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+
+        self.env.add_object(
+            name="box",
+            position=np.array([0.0, 0.0, 0.0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+        self.env.add_object(
+            name="box",
+            position=np.array([0.0, 3.0, 0.0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+        self.env.add_object(
+            name="box",
+            position=np.array([0.0, 1.5, -2.0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+        self.env.add_object(
+            name="box",
+            position=np.array([-2.0, 1.5, 0.0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+        self.env.add_object(
+            name="box",
+            position=np.array([2.0, 1.5, 0.0]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )

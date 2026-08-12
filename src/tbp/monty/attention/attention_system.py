@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -280,3 +281,13 @@ class AttentionSystem:
         if len(data) == 0:
             return data
         return data[data["weight"].to_numpy() > 0]
+
+class NoOpAttentionSystem(AttentionSystem):
+    def update_regions(self, regions: list[list[AttentionWeight]]) -> None:
+        pass
+
+    def filter_percepts(self, percepts: list[Message | None]) -> list[Message | None]:
+        return percepts
+
+    def filter_goals(self, goals: list[Goal]) -> list[Goal]:
+        return goals

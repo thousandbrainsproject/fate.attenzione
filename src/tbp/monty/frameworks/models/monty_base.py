@@ -13,7 +13,7 @@ import copy
 import logging
 from typing import Any, ClassVar, Sequence
 
-from tbp.monty.attention.attention_system import AttentionSystem
+from tbp.monty.attention.attention_system import AttentionSystem, NoOpAttentionSystem
 from tbp.monty.cmp import Goal, Message
 from tbp.monty.frameworks.actions.actions import Action
 from tbp.monty.frameworks.environments.environment import SemanticID
@@ -54,6 +54,7 @@ class MontyBase(Monty):
         min_train_steps,
         num_exploratory_steps,
         max_total_steps,
+        attention_system: bool = False,
         copy_lm_0_to_all_lms: bool = False,
     ) -> None:
         """Initialize the base class.
@@ -148,7 +149,9 @@ class MontyBase(Monty):
         self._is_done = False
         self._actions: list[Action] = []
         self._goals: list[Goal] = []
-        self._attention_system = AttentionSystem()
+        self._attention_system = (
+            AttentionSystem() if attention_system else NoOpAttentionSystem()
+        )
         self._copy_lm_0_to_all_lms = copy_lm_0_to_all_lms
 
     @property
