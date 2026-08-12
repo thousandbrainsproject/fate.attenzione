@@ -152,7 +152,9 @@ class AttentionSystem:
             The grid built from this step's regions alone.
 
         """
-        attention_weights = [aw for region in regions for aw in region]
+        attention_weights = [
+            aw for region in regions for aw in region if aw.location is not None
+        ]
         covoxel_points = voxelize_and_bin_points(
             np.asarray([aw.location for aw in attention_weights]), self._voxel_size
         )
