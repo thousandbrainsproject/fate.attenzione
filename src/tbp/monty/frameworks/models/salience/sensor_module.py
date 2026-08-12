@@ -174,12 +174,11 @@ class SalienceSM(SensorModule):
 
         # Restore the weighted salience to image shape; boolean-mask indexing and
         # np.where enumerate pixels in the same row-major order.
-        salience_map = np.zeros(on_object.on_object_mask.shape)
-        salience_map[on_object.on_object_mask] = salience
+        # salience_map = np.zeros(on_object.on_object_mask.shape)
+        # salience_map[on_object.on_object_mask] = salience
 
         surface_mask = segmentation_map.astype(bool) & on_object.on_object_mask
-        surface_locations = on_object.locations_map[surface_mask]
-        surface_salience = salience_map[surface_mask]
+        # surface_salience = salience_map[surface_mask]
 
         return segmentation_map, [
             AttentionWeight(
