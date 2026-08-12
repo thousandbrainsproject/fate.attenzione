@@ -51,13 +51,17 @@ class LivePlotter:
     def initialize_online_plotting(self, save_dir: Path | str | None = None):
         # Build mixed 2D/3D axes explicitly. plt.subplots() would leave orphaned 2D
         # axes behind if we later replace slots with projection="3d".
-        self.fig = plt.figure(figsize=(12, 6))
-        self.fig.subplots_adjust(top=1.1)
+        # Keep the original 1x4 row in place; add a second attention view under
+        # the rightmost panel only.
+        self.fig = plt.figure(figsize=(12, 9))
+        self.fig.subplots_adjust(top=1.05, hspace=0.3, wspace=0.2)
+        gs = self.fig.add_gridspec(2, 4, height_ratios=[1.0, 0.85])
         self.ax = [
-            self.fig.add_subplot(1, 4, 1),
-            self.fig.add_subplot(1, 4, 2),
-            self.fig.add_subplot(1, 4, 3, projection="3d"),
-            self.fig.add_subplot(1, 4, 4, projection="3d"),
+            self.fig.add_subplot(gs[0, 0]),
+            self.fig.add_subplot(gs[0, 1]),
+            self.fig.add_subplot(gs[0, 2], projection="3d"),
+            self.fig.add_subplot(gs[0, 3], projection="3d"),
+            self.fig.add_subplot(gs[1, 3], projection="3d"),
         ]
         self.setup_camera_ax()
         self.setup_sensor_ax()
@@ -315,18 +319,14 @@ class LivePlotter:
 
         Shows voxels held in ``attention_system.grid`` after the latest
         ``attention_system.step``, plus inhibit points applied this step
-        (lagged one step from LM ``propose_region``).
+        (lagged one step from LM ``propose_region``). Draws a side view in
+        the original rightmost panel and a top view in a new panel below it.
 
         Args:
             attention_system: The model's attention system, or None.
             status: Recognition / inhibit status string for the title.
             inhibited_locations: ``(N, 3)`` inhibit points applied this step.
         """
-        ax = self.ax[3]
-        ax.cla()
-        # Side view: X horizontal, Z vertical — makes XY-overlap / Z-mismatch obvious.
-        ax.view_init(elev=0, azim=-90)
-
         if inhibited_locations is None:
             inhibited_locations = np.empty((0, 3))
         else:
@@ -334,13 +334,15 @@ class LivePlotter:
                 -1, 3
             )
 
-        inhibiting = len(inhibited_locations) > 0 or "inhibit applied" in status
-        title_color = "crimson" if inhibiting else "black"
-
         centres = np.empty((0, 3))
         weights = np.empty(0)
         voxel_size = (
             attention_system.voxel_size if attention_system is not None else 0.01
+        )
+        voxel_lifetime = (
+            float(attention_system.voxel_lifetime)
+            if attention_system is not None
+            else 1.0
         )
         if attention_system is not None and len(attention_system.grid) > 0:
             grid = attention_system.grid
@@ -348,55 +350,14 @@ class LivePlotter:
             centres = (indices + _VOXEL_CENTRE_OFFSET) * voxel_size
             weights = grid["weight"].to_numpy(dtype=float)
 
-        if len(centres) == 0 and len(inhibited_locations) == 0:
-            ax.set_title("Attention Filter (empty)", color=title_color)
-            ax.text2D(0.5, 0.5, "No voxels", transform=ax.transAxes, ha="center")
-            self._hide_3d_axes(ax)
-            return
-
-        # mplot3d depth-sorts; with azim=-90 the camera looks along -Y, so bias Y.
-        y_bias = voxel_size
-        if len(inhibited_locations):
-            inhibited_plot = inhibited_locations.copy()
-            inhibited_plot[:, 1] -= y_bias
-            ax.scatter(
-                inhibited_plot[:, 0],
-                inhibited_plot[:, 1],
-                inhibited_plot[:, 2],
-                c="lightcoral",
-                s=3,
-                alpha=0.25,
-                depthshade=False,
-            )
-
-        if len(centres):
-            centres_plot = centres.copy()
-            centres_plot[:, 1] += y_bias
-            ax.scatter(
-                centres_plot[:, 0],
-                centres_plot[:, 1],
-                centres_plot[:, 2],
-                c=weights,
-                cmap="viridis",
-                s=28,
-                alpha=1.0,
-                vmin=0.0,
-                vmax=float(attention_system.voxel_lifetime),
-                depthshade=False,
-                edgecolors="k",
-                linewidths=0.35,
-            )
-
+        inhibiting = len(inhibited_locations) > 0 or "inhibit applied" in status
+        title_color = "crimson" if inhibiting else "black"
         title_parts = []
         if len(centres):
             title_parts.append(f"{len(centres)} grid voxels")
         if len(inhibited_locations):
             title_parts.append(f"{len(inhibited_locations)} inhibit applied")
-        ax.set_title(
-            f"Attention ({', '.join(title_parts)})",
-            color=title_color,
-            fontsize=9,
-        )
+        count_label = ", ".join(title_parts) if title_parts else "empty"
 
         bound_points = (
             np.vstack([centres, inhibited_locations])
@@ -405,8 +366,58 @@ class LivePlotter:
             if len(centres)
             else inhibited_locations
         )
-        self._set_attention_limits(ax, bound_points, voxel_size)
-        self._hide_3d_axes(ax)
+
+        # Side: look onto XY (elev=90). Top: look onto XZ (elev=0, azim=-90) —
+        # the latter is the previous single-panel view.
+        views = (
+            (self.ax[3], 90, -90, 2, f"Attention side ({count_label})"),
+            (self.ax[4], 0, -90, 1, f"Attention top ({count_label})"),
+        )
+        for ax, elev, azim, depth_axis, title in views:
+            ax.cla()
+            ax.view_init(elev=elev, azim=azim)
+            if len(centres) == 0 and len(inhibited_locations) == 0:
+                ax.set_title(title, color=title_color, fontsize=9)
+                ax.text2D(0.5, 0.5, "No voxels", transform=ax.transAxes, ha="center")
+                self._hide_3d_axes(ax)
+                continue
+
+            # Bias along the camera-forward axis so mplot3d depth-sorts layers apart.
+            depth_bias = voxel_size
+            if len(inhibited_locations):
+                inhibited_plot = inhibited_locations.copy()
+                inhibited_plot[:, depth_axis] -= depth_bias
+                ax.scatter(
+                    inhibited_plot[:, 0],
+                    inhibited_plot[:, 1],
+                    inhibited_plot[:, 2],
+                    c="lightcoral",
+                    s=3,
+                    alpha=0.25,
+                    depthshade=False,
+                )
+
+            if len(centres):
+                centres_plot = centres.copy()
+                centres_plot[:, depth_axis] += depth_bias
+                ax.scatter(
+                    centres_plot[:, 0],
+                    centres_plot[:, 1],
+                    centres_plot[:, 2],
+                    c=weights,
+                    cmap="viridis",
+                    s=28,
+                    alpha=1.0,
+                    vmin=0.0,
+                    vmax=voxel_lifetime,
+                    depthshade=False,
+                    edgecolors="k",
+                    linewidths=0.35,
+                )
+
+            ax.set_title(title, color=title_color, fontsize=9)
+            self._set_attention_limits(ax, bound_points, voxel_size)
+            self._hide_3d_axes(ax)
 
     def _set_attention_limits(
         self, ax, points: np.ndarray, voxel_size: float
@@ -501,6 +512,9 @@ class LivePlotter:
         self._hide_3d_axes(self.ax[2])
 
     def setup_attention_ax(self):
-        self.ax[3].set_title("Attention Filter")
-        self.ax[3].view_init(elev=0, azim=-90)
+        self.ax[3].set_title("Attention side")
+        self.ax[3].view_init(elev=90, azim=-90)
         self._hide_3d_axes(self.ax[3])
+        self.ax[4].set_title("Attention top")
+        self.ax[4].view_init(elev=0, azim=-90)
+        self._hide_3d_axes(self.ax[4])
