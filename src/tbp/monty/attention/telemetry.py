@@ -47,7 +47,6 @@ class AttentionSystemTelemetry:
                 dict(
                     voxels=grid.index.to_frame(index=False).to_numpy(),
                     weight=grid["weight"].to_numpy(),
-                    count=grid["count"].to_numpy(),
                 )
                 for grid in self.voxel_grids
             ],
