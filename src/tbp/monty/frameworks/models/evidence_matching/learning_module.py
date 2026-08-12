@@ -1134,8 +1134,29 @@ class EvidenceGraphLM(GraphLM):
             The inhibited object region.
         """
         logging.info(f"Inhibiting object region for {object_id}")
-        # get graph locations for object id
-        graph_locations = self.graph_memory.get_locations_in_graph(object_id, "first")
+        first_input_channel = self.graph_memory.get_input_channels_in_graph(object_id)[
+            0
+        ]
+        graph_locations = self.graph_memory.get_locations_in_graph(
+            object_id, first_input_channel
+        )
+        surface_normals = self.graph_memory.get_rotation_features_at_all_nodes(
+            object_id, first_input_channel
+        )[:, 0, :]
+
+        buffer_location_distance = 0.02
+        n = 10
+        # n samples equally spaced along ±surface normal, up to the buffer distance.
+        # Skip the zero offset; the original surface points are kept separately.
+        offsets = np.linspace(-buffer_location_distance, buffer_location_distance, n)
+        offsets = offsets[np.abs(offsets) > 0]
+        buffered_graph_locations = (
+            graph_locations[:, None, :]
+            + offsets[None, :, None] * surface_normals[:, None, :]
+        ).reshape(-1, 3)
+        expanded_graph_locations = np.vstack(
+            [graph_locations, buffered_graph_locations]
+        )
 
         mlh = self.get_mlh_for_object(object_id)
         logging.info(f"MLH for {object_id}: {mlh}")
@@ -1144,7 +1165,7 @@ class EvidenceGraphLM(GraphLM):
 
         # Abusing this function because time.
         translated, _ = apply_rf_transform_to_points(
-            locations=graph_locations,
+            locations=expanded_graph_locations,
             features=None,
             location_rel_model=current_loc,
             object_location_rel_body=mlh["location"],

@@ -24,7 +24,6 @@ def empty_voxel_grid() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "weight": pd.Series(dtype=np.int32),
-            "count": pd.Series(dtype=np.int32),
         },
         index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
     )
@@ -45,7 +44,7 @@ class AttentionSystem:
 
     def __init__(
         self,
-        voxel_size: float = 0.005,
+        voxel_size: float = 0.01,
         voxel_lifetime: int = INITIAL_WEIGHT,
         telemetry: AttentionSystemTelemetry | None = None,
     ):
@@ -157,21 +156,22 @@ class AttentionSystem:
         covoxel_points = voxelize_and_bin_points(
             np.asarray([aw.location for aw in attention_weights]), self._voxel_size
         )
-        weights = []
-        for indices in covoxel_points.values():
-            weights.append(np.mean([attention_weights[i].weight for i in indices]))
 
         index = pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS)
-        counts = (
-            pd.Series(1, index=index, dtype=np.int32)
-            .groupby(level=list(VOXEL_LEVELS))
-            .sum()
-            .astype(np.int32)
+        # Both columns must carry the voxel index explicitly: `counts` comes out
+        # of a groupby, which sorts the index, so a bare list here would be
+        # assigned positionally to the wrong voxels.
+        weights = pd.Series(
+            [
+                np.mean([attention_weights[i].weight for i in indices])
+                for indices in covoxel_points.values()
+            ],
+            index=index,
+            dtype=float,
         )
         return pd.DataFrame(
             {
                 "weight": weights,
-                "count": counts,
             }
         )
 
@@ -221,10 +221,6 @@ class AttentionSystem:
                 .clip(-np.inf, self._voxel_lifetime)
                 .astype(np.int32)
             )
-            fresh.loc[seen_before, "count"] = (
-                fresh.loc[seen_before, "count"].to_numpy()
-                + remembered.loc[seen_before, "count"].to_numpy()
-            ).astype(np.int32)
 
         # The fresh row wins outright, so drop the stale one it replaces.
         carried = remembered.drop(index=fresh.index, errors="ignore")

@@ -721,7 +721,7 @@ class FateAttenzioneInterface(Interface):
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
         self.env.add_object(
-            name="master_chef_can",
+            name="bowl",
             position=np.array([-0.2, 1.4, 0]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
