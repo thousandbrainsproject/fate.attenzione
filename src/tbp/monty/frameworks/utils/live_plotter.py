@@ -31,6 +31,9 @@ _NINE_PATCH_IDS = tuple(SensorID(f"patch_{i}") for i in (1, 2, 3, 4, 0, 5, 6, 7,
 
 # Voxel coordinates are lower corners; offset to centres for plotting.
 _VOXEL_CENTRE_OFFSET = 0.5
+# How filtered patch images are dimmed in the live plotter.
+_FILTERED_ALPHA = 0.45
+_FILTERED_GREY_BLEND = 0.65
 
 
 class LivePlotter:
@@ -46,6 +49,8 @@ class LivePlotter:
     - "rgba" modality in "view_finder" sensor observation
     - "depth" modality in the first patch sensor observation (single-patch mode)
     - "rgba" modality in "patch_0".."patch_8" (nine-patch mode)
+    - optional SalienceSM view-finder segmentation telemetry when
+      ``save_segmentation`` is enabled
     """
 
     def __init__(self):
@@ -148,7 +153,9 @@ class LivePlotter:
             A tuple of the first learning module, the first sensor module raw
             observations, the patch depth, the view finder rgba, mlh, mlh model,
             optionally a list of RGB images for patch_0..patch_8, the
-            attention system (or None), and all learning modules.
+            attention system (or None), all learning modules, the set of
+            patch sensor IDs whose percepts were filtered by attention, and
+            the latest view-finder segmentation mask (or None).
         """
         first_learning_module = model.learning_modules[0]
         first_sensor_module = model.sensor_modules[0]
@@ -187,6 +194,11 @@ class LivePlotter:
             mlh = None
             mlh_model = None
         attention_system = getattr(model, "attention_system", None)
+        filtered_patch_ids = self._attention_filtered_patch_ids(
+            getattr(model, "sensor_module_outputs", None),
+            attention_system,
+        )
+        segmentation_mask = self._latest_view_finder_segmentation(model)
         return (
             first_learning_module,
             first_sensor_module_raw_observations,
@@ -197,6 +209,80 @@ class LivePlotter:
             patch_rgbs,
             attention_system,
             list(model.learning_modules),
+            filtered_patch_ids,
+            segmentation_mask,
+        )
+
+    @staticmethod
+    def _latest_view_finder_segmentation(model: Monty) -> np.ndarray | None:
+        """Return the most recent view-finder segmentation mask, if any.
+
+        Args:
+            model: Monty model whose sensor modules may include a SalienceSM
+                view finder with ``save_segmentation`` telemetry.
+
+        Returns:
+            The latest ``(H, W)`` mask, or None when unavailable.
+        """
+        for sm in model.sensor_modules:
+            if sm.sensor_module_id != SensorID("view_finder"):
+                continue
+            telemetry = getattr(sm, "_snapshot_telemetry", None)
+            maps = getattr(telemetry, "segmentation_maps", None)
+            if not maps:
+                return None
+            mask = maps[-1]
+            return None if mask is None else np.asarray(mask)
+        return None
+
+    def _attention_filtered_patch_ids(
+        self,
+        sensor_module_outputs,
+        attention_system,
+    ) -> frozenset[SensorID]:
+        """Return patch sensor IDs whose percepts were filtered by attention.
+
+        A percept is filtered when the attention voxel grid is non-empty and the
+        percept location falls outside that grid (see
+        ``AttentionSystem.filter_percepts``).
+
+        Args:
+            sensor_module_outputs: Percepts after ``filter_percepts``, or None.
+            attention_system: The model's attention system, or None.
+
+        Returns:
+            Frozen set of filtered patch ``SensorID``s.
+        """
+        if (
+            attention_system is None
+            or len(attention_system.grid) == 0
+            or not sensor_module_outputs
+        ):
+            return frozenset()
+
+        patch_ids = (
+            frozenset(_NINE_PATCH_IDS)
+            if self._nine_patch_mode
+            else frozenset({SensorID("patch"), SensorID("patch_0")})
+        )
+        candidates: list[tuple[SensorID, np.ndarray]] = []
+        for percept in sensor_module_outputs:
+            if percept is None or percept.location is None:
+                continue
+            sender_id = SensorID(percept.sender_id)
+            if sender_id not in patch_ids:
+                continue
+            candidates.append((sender_id, np.asarray(percept.location, dtype=float)))
+        if not candidates:
+            return frozenset()
+
+        contained = attention_system.contains_points(
+            np.stack([loc for _, loc in candidates])
+        )
+        return frozenset(
+            sender_id
+            for (sender_id, _), keep in zip(candidates, contained)
+            if not keep
         )
 
     def show_observations(
@@ -210,6 +296,8 @@ class LivePlotter:
         patch_rgbs,
         attention_system,
         learning_modules,
+        filtered_patch_ids,
+        segmentation_mask,
         step: int,
         is_saccade_on_image_data_loader=False,
     ) -> None:
@@ -219,11 +307,12 @@ class LivePlotter:
             first_sensor_depth,
             view_finder_rgba,
             is_saccade_on_image_data_loader,
+            segmentation_mask=segmentation_mask,
         )
         if patch_rgbs is not None:
-            self.show_patches(patch_rgbs)
+            self.show_patches(patch_rgbs, filtered_patch_ids)
         else:
-            self.show_patch(first_sensor_depth)
+            self.show_patch(first_sensor_depth, filtered_patch_ids)
         if mlh_model:
             self.show_mlh(mlh, mlh_model)
         # propose_region after this step is what will be applied next step. What
@@ -305,9 +394,14 @@ class LivePlotter:
         first_sensor_depth,
         view_finder_rgba,
         is_saccade_on_image_data_loader,
+        segmentation_mask=None,
     ):
         if self.camera_image:
             self.camera_image.remove()
+
+        view_finder_rgba = self._overlay_segmentation(
+            view_finder_rgba, segmentation_mask
+        )
 
         if is_saccade_on_image_data_loader:
             center_pixel_id = np.array([200, 200])
@@ -347,21 +441,142 @@ class LivePlotter:
                     evidences=evidences,
                 )
 
-    def show_patch(self, first_sensor_depth):
+    @staticmethod
+    def _overlay_segmentation(
+        rgba: np.ndarray, mask: np.ndarray | None
+    ) -> np.ndarray:
+        """Tint active segmentation pixels green on a view-finder frame.
+
+        Matches the blend used by ``analysis/visualize_3d.SMTelemetry.overlay``.
+
+        Args:
+            rgba: View-finder RGBA image, float in ``[0, 1]`` or uint8.
+            mask: ``(H, W)`` segmentation mask, or None.
+
+        Returns:
+            A copy of ``rgba`` with the mask tinted, or ``rgba`` unchanged when
+            there is nothing to overlay.
+        """
+        if mask is None or not np.any(mask > 0):
+            return rgba
+
+        image = np.asarray(rgba).copy()
+        active = np.asarray(mask) > 0
+        if image.shape[:2] != active.shape:
+            return rgba
+
+        is_uint8 = image.dtype == np.uint8 or (
+            np.issubdtype(image.dtype, np.integer) and image.max() > 1
+        )
+        if is_uint8:
+            image = image.astype(np.float32)
+            tint_scale = 255.0
+            out_dtype = np.uint8
+        else:
+            image = image.astype(np.float32)
+            if image.max() > 1.0:
+                image = image / 255.0
+            tint_scale = 1.0
+            out_dtype = np.float32
+
+        tint = np.zeros_like(image)
+        tint[..., 1] = tint_scale
+        if image.shape[-1] == 4:
+            tint[..., 3] = 0.5 * tint_scale
+        image[active] = image[active] * 0.6 + tint[active] * 0.4
+        if out_dtype == np.uint8:
+            return np.clip(image, 0, 255).astype(np.uint8)
+        return np.clip(image, 0.0, 1.0)
+
+    def show_patch(self, first_sensor_depth, filtered_patch_ids=frozenset()):
+        """Update the single-patch depth panel.
+
+        Filtered percepts are shown greyed-out with reduced alpha.
+
+        Args:
+            first_sensor_depth: Depth image for the primary patch sensor.
+            filtered_patch_ids: Patch sensor IDs filtered by attention this step.
+        """
         if self.depth_image:
             self.depth_image.remove()
-        self.depth_image = self.ax[1].imshow(
-            first_sensor_depth,
-            cmap="viridis_r",
+        filtered = bool(
+            filtered_patch_ids & {SensorID("patch"), SensorID("patch_0")}
         )
-        # self.colorbar.update_normal(self.depth_image)
+        display, imshow_kwargs = self._filtered_depth_display(
+            first_sensor_depth, filtered
+        )
+        self.depth_image = self.ax[1].imshow(display, **imshow_kwargs)
 
-    def show_patches(self, patch_rgbs):
-        """Update the 3x3 middle panel with RGB images from patch_0..patch_8."""
-        for i, (ax, rgb) in enumerate(zip(self.patch_axes, patch_rgbs)):
+    def show_patches(self, patch_rgbs, filtered_patch_ids=frozenset()):
+        """Update the 3x3 middle panel with RGB images from patch_0..patch_8.
+
+        Filtered percepts are shown greyed-out with reduced alpha.
+
+        Args:
+            patch_rgbs: RGB arrays ordered to match ``_NINE_PATCH_IDS``.
+            filtered_patch_ids: Patch sensor IDs filtered by attention this step.
+        """
+        for i, (ax, rgb, patch_id) in enumerate(
+            zip(self.patch_axes, patch_rgbs, _NINE_PATCH_IDS)
+        ):
             if self.patch_images[i] is not None:
                 self.patch_images[i].remove()
-            self.patch_images[i] = ax.imshow(rgb)
+            self.patch_images[i] = ax.imshow(
+                self._filtered_rgb_display(rgb, patch_id in filtered_patch_ids)
+            )
+
+    @staticmethod
+    def _filtered_rgb_display(rgb: np.ndarray, filtered: bool) -> np.ndarray:
+        """Return an RGB(A) image, greyed and faded when filtered.
+
+        Args:
+            rgb: HxWx3 image, values in ``[0, 1]`` or ``[0, 255]``.
+            filtered: Whether attention filtered this patch's percept.
+
+        Returns:
+            RGB array when not filtered, RGBA when filtered.
+        """
+        rgb = np.asarray(rgb, dtype=float)
+        if rgb.max() > 1.0:
+            rgb = rgb / 255.0
+        if not filtered:
+            return rgb
+        grey = np.mean(rgb, axis=-1, keepdims=True)
+        dimmed = (1.0 - _FILTERED_GREY_BLEND) * rgb + _FILTERED_GREY_BLEND * grey
+        alpha = np.full((*dimmed.shape[:2], 1), _FILTERED_ALPHA, dtype=float)
+        return np.concatenate([dimmed, alpha], axis=-1)
+
+    @staticmethod
+    def _filtered_depth_display(
+        depth: np.ndarray, filtered: bool
+    ) -> tuple[np.ndarray, dict]:
+        """Return depth display data and ``imshow`` kwargs.
+
+        Args:
+            depth: 2D depth image.
+            filtered: Whether attention filtered this patch's percept.
+
+        Returns:
+            ``(image, kwargs)`` for ``ax.imshow``. When filtered, ``image`` is
+            an RGBA array already greyed and faded; otherwise it is the raw
+            depth with a ``viridis_r`` colormap.
+        """
+        if not filtered:
+            return np.asarray(depth), {"cmap": "viridis_r"}
+
+        depth = np.asarray(depth, dtype=float)
+        dmin = float(np.nanmin(depth))
+        dmax = float(np.nanmax(depth))
+        if dmax > dmin:
+            normed = (depth - dmin) / (dmax - dmin)
+        else:
+            normed = np.zeros_like(depth, dtype=float)
+        rgba = plt.get_cmap("viridis_r")(normed)
+        rgb = rgba[..., :3]
+        grey = np.mean(rgb, axis=-1, keepdims=True)
+        dimmed = (1.0 - _FILTERED_GREY_BLEND) * rgb + _FILTERED_GREY_BLEND * grey
+        alpha = np.full((*dimmed.shape[:2], 1), _FILTERED_ALPHA, dtype=float)
+        return np.concatenate([dimmed, alpha], axis=-1), {}
 
     def show_mlh(self, mlh, mlh_model):
         ax = self.ax[2]
