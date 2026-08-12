@@ -38,9 +38,15 @@ class LivePlotter:
         pass
 
     def initialize_online_plotting(self):
-        self.fig, self.ax = plt.subplots(1, 3, figsize=(9, 6))
+        # Build mixed 2D/3D axes explicitly. plt.subplots() leaves an orphaned 2D
+        # axis behind if we later replace a slot with projection="3d".
+        self.fig = plt.figure(figsize=(9, 6))
         self.fig.subplots_adjust(top=1.1)
-        # self.colorbar = self.fig.colorbar(None, fraction=0.046, pad=0.04)
+        self.ax = [
+            self.fig.add_subplot(1, 3, 1),
+            self.fig.add_subplot(1, 3, 2),
+            self.fig.add_subplot(1, 3, 3, projection="3d"),
+        ]
         self.setup_camera_ax()
         self.setup_sensor_ax()
         self.setup_mlh_ax()
@@ -184,12 +190,14 @@ class LivePlotter:
         # self.colorbar.update_normal(self.depth_image)
 
     def show_mlh(self, mlh, mlh_model):
+        ax = self.ax[2]
         if not mlh_model:
-            self.ax[2].set_title("No MLH")
+            ax.set_title("No MLH")
+            self._hide_3d_axes(ax)
             return
 
-        self.ax[2].cla()
-        self.ax[2].scatter(
+        ax.cla()
+        ax.scatter(
             mlh_model.pos[:, 1],
             mlh_model.pos[:, 0],
             mlh_model.pos[:, 2],
@@ -197,12 +205,33 @@ class LivePlotter:
             s=2,
         )
         # add mlh location to the graph
-        self.ax[2].scatter(
+        ax.scatter(
             mlh["location"][1], mlh["location"][0], mlh["location"][2], c="red", s=15
         )
-        self.ax[2].set_title("MLH")
-        self.ax[2].set_axis_off()
-        self.ax[2].set_aspect("equal")
+        ax.set_title("MLH")
+        ax.set_aspect("equal")
+        self._hide_3d_axes(ax)
+
+    @staticmethod
+    def _hide_3d_axes(ax) -> None:
+        """Fully hide a 3D axis frame, panes, ticks, and grid.
+
+        ``Axes3D.set_axis_off()`` alone is unreliable after ``cla()`` / aspect
+        changes, so clear each axis component explicitly.
+        """
+        ax.set_axis_off()
+        ax.grid(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_zticks([])
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis.pane.fill = False
+            axis.pane.set_edgecolor("none")
+            axis.pane.set_alpha(0)
+            axis.line.set_color((0.0, 0.0, 0.0, 0.0))
+            axis.set_ticklabels([])
+        # Private flag still used by some matplotlib 3D draws after set_axis_off.
+        ax._axis3don = False
 
     def add_text(
         self,
@@ -248,7 +277,6 @@ class LivePlotter:
         self.depth_image = None
 
     def setup_mlh_ax(self):
-        self.ax[2] = plt.subplot(1, 3, 3, projection="3d")
         self.ax[2].set_title("MLH")
-        self.ax[2].set_axis_off()
         self.ax[2].set_aspect("equal")
+        self._hide_3d_axes(self.ax[2])
