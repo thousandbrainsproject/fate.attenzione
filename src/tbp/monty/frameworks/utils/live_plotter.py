@@ -31,6 +31,9 @@ _NINE_PATCH_IDS = tuple(
     SensorID(f"patch_{i}") for i in (1, 2, 3, 4, 0, 5, 6, 7, 8)
 )
 
+# Voxel coordinates are lower corners; offset to centres for plotting.
+_VOXEL_CENTRE_OFFSET = 0.5
+
 
 class LivePlotter:
     """Class for plotting sensor observations during an experiment.
@@ -50,6 +53,12 @@ class LivePlotter:
     def __init__(self):
         self._nine_patch_mode = False
         self.save_dir: Path | None = None
+        # Inhibit points held on the LM after terminal checks are only applied by
+        # the attention system on the *next* Monty step. Buffer them so the plot
+        # shows inhibit on the step it actually affected the grid.
+        self._inhibit_applied_locations: np.ndarray = np.empty((0, 3))
+        # Growing axis limits so the attention panel does not jump/zoom each step.
+        self._attention_bounds: tuple[np.ndarray, np.ndarray] | None = None
 
     def initialize_online_plotting(
         self,
@@ -70,44 +79,54 @@ class LivePlotter:
 
         # Build mixed 2D/3D axes explicitly. plt.subplots() leaves an orphaned 2D
         # axis behind if we later replace a slot with projection="3d".
+        # Layout: camera | sensor/patches | MLH | attention side
+        #                                    (empty below) | attention top
         if self._nine_patch_mode:
-            self.fig = plt.figure(figsize=(10, 5.5))
-            self.fig.subplots_adjust(top=0.9, wspace=0.2, hspace=0.15)
-            # Narrow middle column, with vertical padding so the 3x3 stays compact.
+            self.fig = plt.figure(figsize=(14, 8))
+            self.fig.subplots_adjust(top=0.9, wspace=0.2, hspace=0.25)
             gs = gridspec.GridSpec(
-                3,
-                3,
+                2,
+                4,
                 figure=self.fig,
-                width_ratios=[1.2, 0.65, 1.2],
-                height_ratios=[0.18, 0.64, 0.18],
+                width_ratios=[1.1, 0.65, 1.0, 1.0],
+                height_ratios=[1.0, 0.85],
             )
-            camera_ax = self.fig.add_subplot(gs[:, 0])
-            patch_gs = gs[1, 1].subgridspec(3, 3, wspace=0.05, hspace=0.2)
+            camera_ax = self.fig.add_subplot(gs[0, 0])
+            # Compact 3x3 nested in the sensor column of the top row.
+            patch_gs = gs[0, 1].subgridspec(3, 3, wspace=0.05, hspace=0.2)
             self.patch_axes = [
                 self.fig.add_subplot(patch_gs[row, col])
                 for row in range(3)
                 for col in range(3)
             ]
-            mlh_ax = self.fig.add_subplot(gs[:, 2], projection="3d")
+            mlh_ax = self.fig.add_subplot(gs[0, 2], projection="3d")
+            attn_side_ax = self.fig.add_subplot(gs[0, 3], projection="3d")
+            attn_top_ax = self.fig.add_subplot(gs[1, 3], projection="3d")
             # Keep self.ax[0]/[2] as camera / MLH; middle slot unused in 9-patch mode.
-            self.ax = [camera_ax, None, mlh_ax]
+            self.ax = [camera_ax, None, mlh_ax, attn_side_ax, attn_top_ax]
         else:
-            self.fig = plt.figure(figsize=(9, 6))
-            self.fig.subplots_adjust(top=1.1)
+            self.fig = plt.figure(figsize=(12, 9))
+            self.fig.subplots_adjust(top=1.05, hspace=0.3, wspace=0.2)
+            gs = self.fig.add_gridspec(2, 4, height_ratios=[1.0, 0.85])
             self.ax = [
-                self.fig.add_subplot(1, 3, 1),
-                self.fig.add_subplot(1, 3, 2),
-                self.fig.add_subplot(1, 3, 3, projection="3d"),
+                self.fig.add_subplot(gs[0, 0]),
+                self.fig.add_subplot(gs[0, 1]),
+                self.fig.add_subplot(gs[0, 2], projection="3d"),
+                self.fig.add_subplot(gs[0, 3], projection="3d"),
+                self.fig.add_subplot(gs[1, 3], projection="3d"),
             ]
             self.patch_axes = []
 
         self.setup_camera_ax()
         self.setup_sensor_ax()
         self.setup_mlh_ax()
+        self.setup_attention_ax()
 
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir is not None:
             self.save_dir.mkdir(parents=True, exist_ok=True)
+        self._inhibit_applied_locations = np.empty((0, 3))
+        self._attention_bounds = None
 
     @staticmethod
     def _has_nine_patches(model: Monty | None) -> bool:
@@ -130,7 +149,8 @@ class LivePlotter:
         Returns:
             A tuple of the first learning module, the first sensor module raw
             observations, the patch depth, the view finder rgba, mlh, mlh model,
-            and optionally a list of RGB images for patch_0..patch_8.
+            optionally a list of RGB images for patch_0..patch_8, the
+            attention system (or None), and all learning modules.
         """
         first_learning_module = model.learning_modules[0]
         first_sensor_module = model.sensor_modules[0]
@@ -168,6 +188,7 @@ class LivePlotter:
         else:
             mlh = None
             mlh_model = None
+        attention_system = getattr(model, "attention_system", None)
         return (
             first_learning_module,
             first_sensor_module_raw_observations,
@@ -176,6 +197,8 @@ class LivePlotter:
             mlh,
             mlh_model,
             patch_rgbs,
+            attention_system,
+            list(model.learning_modules),
         )
 
     def show_observations(
@@ -187,10 +210,11 @@ class LivePlotter:
         mlh,
         mlh_model,
         patch_rgbs,
+        attention_system,
+        learning_modules,
         step: int,
         is_saccade_on_image_data_loader=False,
     ) -> None:
-        self.fig.suptitle(f"Observation at step {step}")
         self.show_view_finder(
             first_sensor_module_raw_observations,
             first_learning_module,
@@ -204,6 +228,20 @@ class LivePlotter:
             self.show_patch(first_sensor_depth)
         if mlh_model:
             self.show_mlh(mlh, mlh_model)
+        # propose_region after this step is what will be applied next step. What
+        # attention already applied this step is the buffered previous proposal.
+        pending_inhibit = self._inhibited_locations(learning_modules)
+        applied_inhibit = self._inhibit_applied_locations
+        self._inhibit_applied_locations = pending_inhibit
+        status = self._recognition_status(
+            first_learning_module, inhibit_applied=len(applied_inhibit) > 0
+        )
+        self.fig.suptitle(f"Observation at step {step}")
+        self.show_attention(
+            attention_system,
+            status=status,
+            inhibited_locations=applied_inhibit,
+        )
         plt.pause(0.00001)
         self._save_frame(step)
 
@@ -217,6 +255,50 @@ class LivePlotter:
             return
         path = self.save_dir / f"step_{step:04d}.png"
         self.fig.savefig(path, dpi=120, bbox_inches="tight")
+
+    def _inhibited_locations(self, learning_modules) -> np.ndarray:
+        """Locations from all LMs' current negative attention regions.
+
+        Args:
+            learning_modules: Learning modules to query via ``propose_region``.
+
+        Returns:
+            An ``(N, 3)`` array of inhibited locations, or empty when none.
+        """
+        locations = []
+        for lm in learning_modules:
+            if not hasattr(lm, "propose_region"):
+                continue
+            region = lm.propose_region() or []
+            locations.extend(
+                aw.location
+                for aw in region
+                if aw.location is not None and aw.weight < 0
+            )
+        if not locations:
+            return np.empty((0, 3))
+        return np.asarray(locations, dtype=float)
+
+    def _recognition_status(
+        self, first_learning_module, inhibit_applied: bool = False
+    ) -> str:
+        """Summarize terminal state and applied object-region inhibition.
+
+        Args:
+            first_learning_module: The LM used for terminal-state text.
+            inhibit_applied: Whether inhibit points were applied to attention
+                this step (lagged one step from ``propose_region``).
+
+        Returns:
+            A short status string, or empty when neither applies.
+        """
+        parts = []
+        terminal = getattr(first_learning_module, "terminal_state", None)
+        if terminal is not None:
+            parts.append(f"terminal={terminal}")
+        if inhibit_applied:
+            parts.append("inhibit applied")
+        return " | ".join(parts)
 
     def show_view_finder(
         self,
@@ -306,6 +388,139 @@ class LivePlotter:
         ax.set_aspect("equal")
         self._hide_3d_axes(ax)
 
+    def show_attention(
+        self,
+        attention_system,
+        status: str = "",
+        inhibited_locations: np.ndarray | None = None,
+    ) -> None:
+        """Plot the attention system's current voxel filter.
+
+        Shows voxels held in ``attention_system.grid`` after the latest
+        ``attention_system.step``, plus inhibit points applied this step
+        (lagged one step from LM ``propose_region``). Draws a side view in
+        the rightmost top panel and a top view in the panel below it.
+
+        Args:
+            attention_system: The model's attention system, or None.
+            status: Recognition / inhibit status string for the title.
+            inhibited_locations: ``(N, 3)`` inhibit points applied this step.
+        """
+        if inhibited_locations is None:
+            inhibited_locations = np.empty((0, 3))
+        else:
+            inhibited_locations = np.asarray(inhibited_locations, dtype=float).reshape(
+                -1, 3
+            )
+
+        centres = np.empty((0, 3))
+        weights = np.empty(0)
+        voxel_size = (
+            attention_system.voxel_size if attention_system is not None else 0.01
+        )
+        voxel_lifetime = (
+            float(attention_system.voxel_lifetime)
+            if attention_system is not None
+            else 1.0
+        )
+        if attention_system is not None and len(attention_system.grid) > 0:
+            grid = attention_system.grid
+            indices = grid.index.to_frame(index=False).to_numpy(dtype=float)
+            centres = (indices + _VOXEL_CENTRE_OFFSET) * voxel_size
+            weights = grid["weight"].to_numpy(dtype=float)
+
+        inhibiting = len(inhibited_locations) > 0 or "inhibit applied" in status
+        title_color = "crimson" if inhibiting else "black"
+        title_parts = []
+        if len(centres):
+            title_parts.append(f"{len(centres)} grid voxels")
+        if len(inhibited_locations):
+            title_parts.append(f"{len(inhibited_locations)} inhibit applied")
+        count_label = ", ".join(title_parts) if title_parts else "empty"
+
+        bound_points = (
+            np.vstack([centres, inhibited_locations])
+            if len(centres) and len(inhibited_locations)
+            else centres
+            if len(centres)
+            else inhibited_locations
+        )
+
+        # Side: look onto XY (elev=90). Top: look onto XZ (elev=0, azim=-90).
+        views = (
+            (self.ax[3], 90, -90, 2, f"Attention side ({count_label})"),
+            (self.ax[4], 0, -90, 1, f"Attention top ({count_label})"),
+        )
+        for ax, elev, azim, depth_axis, title in views:
+            ax.cla()
+            ax.view_init(elev=elev, azim=azim)
+            if len(centres) == 0 and len(inhibited_locations) == 0:
+                ax.set_title(title, color=title_color, fontsize=9)
+                ax.text2D(0.5, 0.5, "No voxels", transform=ax.transAxes, ha="center")
+                self._hide_3d_axes(ax)
+                continue
+
+            # Bias along the camera-forward axis so mplot3d depth-sorts layers apart.
+            depth_bias = voxel_size
+            if len(inhibited_locations):
+                inhibited_plot = inhibited_locations.copy()
+                inhibited_plot[:, depth_axis] -= depth_bias
+                ax.scatter(
+                    inhibited_plot[:, 0],
+                    inhibited_plot[:, 1],
+                    inhibited_plot[:, 2],
+                    c="lightcoral",
+                    s=3,
+                    alpha=0.25,
+                    depthshade=False,
+                )
+
+            if len(centres):
+                centres_plot = centres.copy()
+                centres_plot[:, depth_axis] += depth_bias
+                ax.scatter(
+                    centres_plot[:, 0],
+                    centres_plot[:, 1],
+                    centres_plot[:, 2],
+                    c=weights,
+                    cmap="viridis",
+                    s=28,
+                    alpha=1.0,
+                    vmin=0.0,
+                    vmax=voxel_lifetime,
+                    depthshade=False,
+                    edgecolors="k",
+                    linewidths=0.35,
+                )
+
+            ax.set_title(title, color=title_color, fontsize=9)
+            self._set_attention_limits(ax, bound_points, voxel_size)
+            self._hide_3d_axes(ax)
+
+    def _set_attention_limits(
+        self, ax, points: np.ndarray, voxel_size: float
+    ) -> None:
+        """Keep a padded, monotonically growing view of the attention cloud."""
+        mins = points.min(axis=0)
+        maxs = points.max(axis=0)
+        if self._attention_bounds is None:
+            self._attention_bounds = (mins.copy(), maxs.copy())
+        else:
+            self._attention_bounds = (
+                np.minimum(self._attention_bounds[0], mins),
+                np.maximum(self._attention_bounds[1], maxs),
+            )
+        bmin, bmax = self._attention_bounds
+        span = np.maximum(bmax - bmin, voxel_size)
+        # Square the view and add padding so points are not clipped at the edge.
+        side = float(np.max(span)) * 1.25
+        mid = 0.5 * (bmin + bmax)
+        half = 0.5 * max(side, 4.0 * voxel_size)
+        ax.set_xlim(mid[0] - half, mid[0] + half)
+        ax.set_ylim(mid[1] - half, mid[1] + half)
+        ax.set_zlim(mid[2] - half, mid[2] + half)
+        ax.set_box_aspect([1, 1, 1])
+
     @staticmethod
     def _hide_3d_axes(ax) -> None:
         """Fully hide a 3D axis frame, panes, ticks, and grid.
@@ -382,3 +597,11 @@ class LivePlotter:
         self.ax[2].set_title("MLH")
         self.ax[2].set_aspect("equal")
         self._hide_3d_axes(self.ax[2])
+
+    def setup_attention_ax(self):
+        self.ax[3].set_title("Attention side")
+        self.ax[3].view_init(elev=90, azim=-90)
+        self._hide_3d_axes(self.ax[3])
+        self.ax[4].set_title("Attention top")
+        self.ax[4].view_init(elev=0, azim=-90)
+        self._hide_3d_axes(self.ax[4])

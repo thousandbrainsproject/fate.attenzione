@@ -101,15 +101,6 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
             observations, proprioceptive_state = self.env_interface.step(actions)
 
             num_steps += 1
-            if self.show_sensor_output:
-                is_saccade_on_image_env_interface = isinstance(
-                    self.env_interface, SaccadeOnImageInterface
-                )
-                self.live_plotter.show_observations(
-                    *self.live_plotter.hardcoded_assumptions(observations, self.model),
-                    num_steps,
-                    is_saccade_on_image_env_interface,
-                )
             try:
                 actions = self.model.step(ctx, observations, proprioceptive_state)
                 actions = self._step_hook(
@@ -130,6 +121,15 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
                 #       so the experiment can set max steps based on that knowledge
                 #       alone.
                 break
+            if self.show_sensor_output:
+                is_saccade_on_image_env_interface = isinstance(
+                    self.env_interface, SaccadeOnImageInterface
+                )
+                self.live_plotter.show_observations(
+                    *self.live_plotter.hardcoded_assumptions(observations, self.model),
+                    num_steps,
+                    is_saccade_on_image_env_interface,
+                )
             if self.model.is_done:
                 break
 
