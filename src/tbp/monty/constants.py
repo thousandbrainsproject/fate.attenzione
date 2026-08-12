@@ -8,7 +8,9 @@
 # https://opensource.org/licenses/MIT.
 """Constants shared across the Monty framework."""
 
-MAX_PERCEPT_DISTANCE = 100.0
+import numpy as np
+
+MAX_PERCEPT_DISTANCE = np.inf
 """Distance, in meters, at or beyond which a sensed surface is off-object.
 
 This is the single source of the perceptual range convention:
