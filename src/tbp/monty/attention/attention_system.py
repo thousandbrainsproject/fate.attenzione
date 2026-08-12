@@ -122,14 +122,10 @@ class AttentionSystem:
             A boolean array with shape (N,).
 
         """
-        occupied = self._voxel_grid.index
         points = np.atleast_2d(points)
-        if len(occupied) == 0:
+        if len(self._voxel_grid) == 0:
             return np.zeros(len(points), dtype=bool)
-
-        indices = np.floor(points / self._voxel_size).astype(int)
-        query = pd.MultiIndex.from_arrays(indices.T, names=VOXEL_LEVELS)
-        return query.isin(occupied)
+        return self._voxel_index(points).isin(self._voxel_grid.index)
 
     def reset(self) -> None:
         """Discard the current grid and recorded telemetry."""
@@ -157,11 +153,19 @@ class AttentionSystem:
         covoxel_points = voxelize_and_bin_points(
             np.asarray([aw.location for aw in attention_weights]), self._voxel_size
         )
-        weights = []
-        for indices in covoxel_points.values():
-            weights.append(np.mean([attention_weights[i].weight for i in indices]))
 
         index = pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS)
+        # Both columns must carry the voxel index explicitly: `counts` comes out
+        # of a groupby, which sorts the index, so a bare list here would be
+        # assigned positionally to the wrong voxels.
+        weights = pd.Series(
+            [
+                np.mean([attention_weights[i].weight for i in indices])
+                for indices in covoxel_points.values()
+            ],
+            index=index,
+            dtype=float,
+        )
         counts = (
             pd.Series(1, index=index, dtype=np.int32)
             .groupby(level=list(VOXEL_LEVELS))
@@ -189,9 +193,10 @@ class AttentionSystem:
             return remembered
 
         decayed = remembered.copy()
-        # Subtracting through the frame would widen the dtype, so write back the
-        # declared one: weight is meant to stay an integer count of steps.
-        decayed["weight"] = (decayed["weight"] - 1).astype(np.int32)
+        # decay the weight toward zero by one
+        decayed["weight"] = (decayed["weight"] - np.sign(decayed["weight"])).astype(
+            np.int32
+        )
         return decayed
 
     def _merge(self, remembered: pd.DataFrame, proposed: pd.DataFrame) -> pd.DataFrame:
@@ -218,7 +223,7 @@ class AttentionSystem:
                     fresh.loc[seen_before, "weight"].to_numpy()
                     + remembered.loc[seen_before, "weight"].to_numpy()
                 )
-                .clip(-np.inf, self._voxel_lifetime)
+                .clip(-self._voxel_lifetime, self._voxel_lifetime)
                 .astype(np.int32)
             )
             fresh.loc[seen_before, "count"] = (
@@ -245,7 +250,7 @@ class AttentionSystem:
         """
         if len(data) == 0:
             return data
-        return data[data["weight"].to_numpy() > 0]
+        return data[data["weight"].to_numpy() != 0]
 
     def _filter(self, goals: Sequence[Goal]) -> list[Goal]:
         """Keep the goals that live in the updated grid.
@@ -266,7 +271,30 @@ class AttentionSystem:
         if not located:
             return unlocated
 
-        contained = self.contains_points(
-            np.asarray([g.location for g in located])
-        )
-        return [g for g, keep in zip(located, contained) if keep] + unlocated
+        voxels = self._voxel_index(np.asarray([g.location for g in located]))
+        weights = self._voxel_grid["weight"].reindex(voxels).to_numpy()
+
+        kept = []
+        for goal, weight in zip(located, weights):
+            if np.isnan(weight):
+                continue
+            goal.confidence = float(
+                weighted(goal.confidence, weight, self._voxel_lifetime / 3)
+            )
+            kept.append(goal)
+
+        return kept + unlocated
+
+    def _voxel_index(self, points: npt.NDArray[np.floating]) -> pd.MultiIndex:
+        indices = np.floor(np.atleast_2d(points) / self._voxel_size).astype(int)
+        return pd.MultiIndex.from_arrays(indices.T, names=VOXEL_LEVELS)
+
+
+def weighted(
+    confidence: float, weight: float, scale: float, gain: float = 2.0
+) -> float:
+    return confidence ** (gain ** -signed_sigmoid(weight, scale))
+
+
+def signed_sigmoid(x: float, scale: float = 2.0) -> float:
+    return np.tanh(x / (2.0 * scale))
