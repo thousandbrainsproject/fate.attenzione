@@ -725,3 +725,13 @@ class FateAttenzioneInterface(Interface):
             position=np.array([-0.2, 1.4, 0]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
+        self.env.add_object(
+            name="banana",
+            position=np.array([0.0, 1.8, 0.05]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+        self.env.add_object(
+            name="spoon",
+            position=np.array([-0.02, 1.4, 0.08]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
