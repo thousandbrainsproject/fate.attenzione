@@ -553,7 +553,7 @@ class MontyExperiment:
         self.logger_handler.pre_episode(self.logger_args)
 
         if self.show_sensor_output:
-            self.live_plotter.initialize_online_plotting()
+            self.live_plotter.initialize_online_plotting(self.model)
 
     def post_episode(self, steps) -> None:
         """Call post_episode on elements in experiment and increment counters.

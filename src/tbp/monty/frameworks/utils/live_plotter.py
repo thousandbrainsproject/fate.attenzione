@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import gridspec
 
 from tbp.monty.frameworks.agents import AgentID
 from tbp.monty.frameworks.models.abstract_monty_classes import Monty, Observations
@@ -18,6 +19,15 @@ from tbp.monty.frameworks.utils.plot_utils import add_patch_outline_to_view_find
 
 # turn interactive plotting off -- call plt.show() to open all figures
 plt.ioff()
+
+# Numbered patch sensors used by multi-patch experiments (e.g. potato_9).
+# Ordered for a 3x3 grid matching sensor spatial layout, with patch_0 at center:
+#   patch_1  patch_2  patch_3
+#   patch_4  patch_0  patch_5
+#   patch_6  patch_7  patch_8
+_NINE_PATCH_IDS = tuple(
+    SensorID(f"patch_{i}") for i in (1, 2, 3, 4, 0, 5, 6, 7, 8)
+)
 
 
 class LivePlotter:
@@ -29,27 +39,62 @@ class LivePlotter:
     WARNING: This plotter makes a number of assumptions right now. For example, it
     assumes that
     - sensor with ID "view_finder" exists
-    - sensor with ID "patch" exists
+    - sensor with ID "patch" or "patch_0".."patch_8" exists
     - "rgba" modality in "view_finder" sensor observation
-    - "depth" modality in "patch" sensor observation
+    - "depth" modality in the first patch sensor observation (single-patch mode)
+    - "rgba" modality in "patch_0".."patch_8" (nine-patch mode)
     """
 
     def __init__(self):
-        pass
+        self._nine_patch_mode = False
 
-    def initialize_online_plotting(self):
+    def initialize_online_plotting(self, model: Monty | None = None):
+        """Create the live-plotting figure.
+
+        Args:
+            model: When provided, used to detect a nine-patch layout
+                (``patch_0`` … ``patch_8``). If those sensors are present, the
+                middle panel becomes a 3x3 grid of RGB patch images instead of a
+                single depth image.
+        """
+        self._nine_patch_mode = self._has_nine_patches(model)
+
         # Build mixed 2D/3D axes explicitly. plt.subplots() leaves an orphaned 2D
         # axis behind if we later replace a slot with projection="3d".
-        self.fig = plt.figure(figsize=(9, 6))
-        self.fig.subplots_adjust(top=1.1)
-        self.ax = [
-            self.fig.add_subplot(1, 3, 1),
-            self.fig.add_subplot(1, 3, 2),
-            self.fig.add_subplot(1, 3, 3, projection="3d"),
-        ]
+        if self._nine_patch_mode:
+            self.fig = plt.figure(figsize=(12, 6))
+            self.fig.subplots_adjust(top=0.92, wspace=0.25)
+            gs = gridspec.GridSpec(1, 3, figure=self.fig, width_ratios=[1.0, 1.3, 1.0])
+            camera_ax = self.fig.add_subplot(gs[0, 0])
+            patch_gs = gs[0, 1].subgridspec(3, 3, wspace=0.08, hspace=0.25)
+            self.patch_axes = [
+                self.fig.add_subplot(patch_gs[row, col])
+                for row in range(3)
+                for col in range(3)
+            ]
+            mlh_ax = self.fig.add_subplot(gs[0, 2], projection="3d")
+            # Keep self.ax[0]/[2] as camera / MLH; middle slot unused in 9-patch mode.
+            self.ax = [camera_ax, None, mlh_ax]
+        else:
+            self.fig = plt.figure(figsize=(9, 6))
+            self.fig.subplots_adjust(top=1.1)
+            self.ax = [
+                self.fig.add_subplot(1, 3, 1),
+                self.fig.add_subplot(1, 3, 2),
+                self.fig.add_subplot(1, 3, 3, projection="3d"),
+            ]
+            self.patch_axes = []
+
         self.setup_camera_ax()
         self.setup_sensor_ax()
         self.setup_mlh_ax()
+
+    @staticmethod
+    def _has_nine_patches(model: Monty | None) -> bool:
+        if model is None:
+            return False
+        sensor_ids = {sm.sensor_module_id for sm in model.sensor_modules}
+        return all(pid in sensor_ids for pid in _NINE_PATCH_IDS)
 
     def hardcoded_assumptions(self, observation: Observations, model: Monty):
         """Extract some of the hardcoded assumptions from the observation.
@@ -64,7 +109,8 @@ class LivePlotter:
 
         Returns:
             A tuple of the first learning module, the first sensor module raw
-            observations, the patch depth, and the view finder rgba.
+            observations, the patch depth, the view finder rgba, mlh, mlh model,
+            and optionally a list of RGB images for patch_0..patch_8.
         """
         first_learning_module = model.learning_modules[0]
         first_sensor_module = model.sensor_modules[0]
@@ -81,12 +127,16 @@ class LivePlotter:
                 break
         assert first_sensor_module_agent_id is not None
 
-        first_sensor_depth = observation[first_sensor_module_agent_id][
-            first_sensor_module_id
-        ]["depth"]
-        view_finder_rgba = observation[first_sensor_module_agent_id][
-            SensorID("view_finder")
-        ]["rgba"]
+        agent_obs = observation[first_sensor_module_agent_id]
+        first_sensor_depth = agent_obs[first_sensor_module_id]["depth"]
+        view_finder_rgba = agent_obs[SensorID("view_finder")]["rgba"]
+
+        patch_rgbs = None
+        if self._nine_patch_mode:
+            patch_rgbs = [
+                np.asarray(agent_obs[pid]["rgba"])[..., :3] for pid in _NINE_PATCH_IDS
+            ]
+
         if hasattr(first_learning_module, "get_current_mlh"):
             mlh = first_learning_module.get_current_mlh()
             if mlh["graph_id"] == "no_observations_yet":
@@ -105,6 +155,7 @@ class LivePlotter:
             view_finder_rgba,
             mlh,
             mlh_model,
+            patch_rgbs,
         )
 
     def show_observations(
@@ -115,6 +166,7 @@ class LivePlotter:
         view_finder_rgba,
         mlh,
         mlh_model,
+        patch_rgbs,
         step: int,
         is_saccade_on_image_data_loader=False,
     ) -> None:
@@ -126,7 +178,10 @@ class LivePlotter:
             view_finder_rgba,
             is_saccade_on_image_data_loader,
         )
-        self.show_patch(first_sensor_depth)
+        if patch_rgbs is not None:
+            self.show_patches(patch_rgbs)
+        else:
+            self.show_patch(first_sensor_depth)
         if mlh_model:
             self.show_mlh(mlh, mlh_model)
         plt.pause(0.00001)
@@ -188,6 +243,13 @@ class LivePlotter:
             cmap="viridis_r",
         )
         # self.colorbar.update_normal(self.depth_image)
+
+    def show_patches(self, patch_rgbs):
+        """Update the 3x3 middle panel with RGB images from patch_0..patch_8."""
+        for i, (ax, rgb) in enumerate(zip(self.patch_axes, patch_rgbs)):
+            if self.patch_images[i] is not None:
+                self.patch_images[i].remove()
+            self.patch_images[i] = ax.imshow(rgb)
 
     def show_mlh(self, mlh, mlh_model):
         ax = self.ax[2]
@@ -272,9 +334,17 @@ class LivePlotter:
         self.text = None
 
     def setup_sensor_ax(self):
-        self.ax[1].set_title("Sensor depth image")
-        self.ax[1].set_axis_off()
-        self.depth_image = None
+        if self._nine_patch_mode:
+            self.patch_images = [None] * len(self.patch_axes)
+            for ax, patch_id in zip(self.patch_axes, _NINE_PATCH_IDS):
+                ax.set_title(str(patch_id), fontsize=8)
+                ax.set_axis_off()
+            self.depth_image = None
+        else:
+            self.ax[1].set_title("Sensor depth image")
+            self.ax[1].set_axis_off()
+            self.depth_image = None
+            self.patch_images = []
 
     def setup_mlh_ax(self):
         self.ax[2].set_title("MLH")

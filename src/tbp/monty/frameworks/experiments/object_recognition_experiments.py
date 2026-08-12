@@ -88,7 +88,7 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
         self.logger_handler.pre_episode(self.logger_args)
 
         if self.show_sensor_output:
-            self.live_plotter.initialize_online_plotting()
+            self.live_plotter.initialize_online_plotting(self.model)
 
     def run_episode_steps(self) -> int:
         """Runs one episode of the experiment.
