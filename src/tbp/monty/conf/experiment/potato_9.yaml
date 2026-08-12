@@ -33,4 +33,23 @@ experiment:
         sensor_module_0:
           save_raw_obs: false
         sensor_module_1:
+          save_raw_obs: false
+        sensor_module_2:
+          save_raw_obs: false
+        sensor_module_3:
+          save_raw_obs: false
+        sensor_module_4:
+          save_raw_obs: false
+        sensor_module_5:
+          save_raw_obs: false
+        sensor_module_6:
+          save_raw_obs: false
+        sensor_module_7:
+          save_raw_obs: false
+        sensor_module_8:
+          save_raw_obs: false
+        sensor_module_9:
           save_raw_obs: true
+
+
+
