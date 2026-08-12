@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from tbp.monty.constants import MAX_PERCEPT_DISTANCE
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.models.salience.strategies import SalienceStrategy
 from tbp.monty.frameworks.models.salience.strategies.vocus2.images import (
@@ -313,7 +314,9 @@ class DepthSalience:
             else:
                 raise ValueError(str(error))
 
-        image = -np.log(image).astype(np.float32)
+        # Normalize by the perceptual range so the background void (depth ==
+        # MAX_PERCEPT_DISTANCE) carries exactly zero salience.
+        image = -np.log(image / MAX_PERCEPT_DISTANCE).astype(np.float32)
         image = np.nan_to_num(image, posinf=0.0)
 
         center, surround = center_surround_pyramids(

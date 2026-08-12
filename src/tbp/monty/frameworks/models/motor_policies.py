@@ -24,6 +24,7 @@ import numpy as np
 import quaternion as qt
 
 from tbp.monty.cmp import Goal, Message
+from tbp.monty.constants import MAX_PERCEPT_DISTANCE
 from tbp.monty.context import RuntimeContext
 from tbp.monty.experiment.motor_system import (
     ExperimentMotorPolicy,
@@ -694,7 +695,7 @@ class JumpToGoal(MotorPolicy):
             observations=observations,
             sensor_id=self._sensor_id,
         )
-        should_undo = depth_at_center >= 1.0
+        should_undo = depth_at_center >= MAX_PERCEPT_DISTANCE
         if should_undo:
             logger.debug("No object visible from hypothesis jump, or inside object!")
         return should_undo
@@ -964,7 +965,7 @@ class InformedPolicy(BasePolicy):
             observations=observations,
             sensor_id="view_finder",
         )
-        should_undo = depth_at_center >= 1.0
+        should_undo = depth_at_center >= MAX_PERCEPT_DISTANCE
         if should_undo:
             logger.debug("No object visible from hypothesis jump, or inside object!")
         return should_undo
@@ -1184,7 +1185,7 @@ class SurfacePolicy(InformedPolicy):
             observations=observations,
             sensor_id=view_sensor_id,
         )
-        if depth_at_center < 1.0:
+        if depth_at_center < MAX_PERCEPT_DISTANCE:
             distance = (
                 depth_at_center
                 - self.desired_object_distance

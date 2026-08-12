@@ -156,7 +156,7 @@ experiment:
           - -0.1
         scene_id: null
         seed: 42
-        data_path: ${path.expanduser:${oc.env:MONTY_DATA}/habitat/objects/compositional_objects}
+        data_path: ${path.expanduser:${oc.env:MONTY_DATA}/compositional_objects_1.1}
         agents:
           agent_args:
             agent_id: agent_id_0
@@ -212,7 +212,6 @@ experiment:
       transform:
       - _target_: tbp.monty.frameworks.environment_utils.transforms.MissingToMaxDepth
         agent_id: agent_id_0
-        max_depth: 1
       - _target_: tbp.monty.frameworks.environment_utils.transforms.DepthTo3DLocations
         agent_id: agent_id_0
         sensor_ids:
@@ -339,6 +338,7 @@ experiment:
       python_log_level: DEBUG
       python_log_to_file: true
       python_log_to_stderr: true
+      output_dir: ${path.expanduser:${oc.env:MONTY_LOGS}/projects/monty_runs/}
       run_name: infer_comp_lvl3_seg_slic
       resume_wandb_run: false
       wandb_id:
