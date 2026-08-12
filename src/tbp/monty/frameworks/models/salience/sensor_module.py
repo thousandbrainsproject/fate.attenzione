@@ -8,6 +8,8 @@
 # https://opensource.org/licenses/MIT.
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 import quaternion as qt
 
@@ -36,6 +38,41 @@ from tbp.monty.frameworks.sensors import SensorID
 from tbp.monty.memento import Memento
 
 __all__ = ["SalienceSM"]
+
+
+def _keep_center_cluster(
+    surface_mask: np.ndarray,
+    locations_map: np.ndarray,
+    max_3d_dist: float,
+) -> np.ndarray:
+    # Grow a cluster from the patch center through neighboring pixels.
+    # Stop when the 3D step to a neighbor exceeds max_3d_dist.
+    height, width = surface_mask.shape
+    center_row, center_col = height // 2, width // 2
+    if not surface_mask[center_row, center_col]:
+        return np.zeros_like(surface_mask)
+
+    in_cluster = np.zeros_like(surface_mask)
+    in_cluster[center_row, center_col] = True
+    to_visit = deque([(center_row, center_col)])
+    while to_visit:
+        row, col = to_visit.popleft()
+        current_location = locations_map[row, col]
+        for d_row, d_col in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            neighbor_row = row + d_row
+            neighbor_col = col + d_col
+            if not (0 <= neighbor_row < height and 0 <= neighbor_col < width):
+                continue
+            if in_cluster[neighbor_row, neighbor_col]:
+                continue
+            if not surface_mask[neighbor_row, neighbor_col]:
+                continue
+            neighbor_location = locations_map[neighbor_row, neighbor_col]
+            dist_3d = np.linalg.norm(neighbor_location - current_location)
+            if dist_3d <= max_3d_dist:
+                in_cluster[neighbor_row, neighbor_col] = True
+                to_visit.append((neighbor_row, neighbor_col))
+    return in_cluster
 
 
 class SalienceSM(SensorModule):
@@ -178,6 +215,10 @@ class SalienceSM(SensorModule):
         # salience_map[on_object.on_object_mask] = salience
 
         surface_mask = segmentation_map.astype(bool) & on_object.on_object_mask
+        surface_mask = _keep_center_cluster(
+            surface_mask, on_object.locations_map, max_3d_dist=0.01
+        )
+        surface_locations = on_object.locations_map[surface_mask]
         # surface_salience = salience_map[surface_mask]
 
         return segmentation_map, [
