@@ -219,7 +219,10 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
             )
 
         if self.show_sensor_output:
-            self.live_plotter.initialize_online_plotting(self.model)
+            self.live_plotter.initialize_online_plotting(
+                model=self.model,
+                save_dir=self._live_plot_save_dir(),
+            )
 
     def post_epoch(self):
         """Post epoch without saving state_dict."""

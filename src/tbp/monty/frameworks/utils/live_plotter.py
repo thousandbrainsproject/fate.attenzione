@@ -8,6 +8,8 @@
 # https://opensource.org/licenses/MIT.
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import gridspec
@@ -47,8 +49,13 @@ class LivePlotter:
 
     def __init__(self):
         self._nine_patch_mode = False
+        self.save_dir: Path | None = None
 
-    def initialize_online_plotting(self, model: Monty | None = None):
+    def initialize_online_plotting(
+        self,
+        model: Monty | None = None,
+        save_dir: Path | str | None = None,
+    ):
         """Create the live-plotting figure.
 
         Args:
@@ -56,6 +63,8 @@ class LivePlotter:
                 (``patch_0`` … ``patch_8``). If those sensors are present, the
                 middle panel becomes a 3x3 grid of RGB patch images instead of a
                 single depth image.
+            save_dir: Optional directory for per-step PNG frames. Created if it
+                does not exist.
         """
         self._nine_patch_mode = self._has_nine_patches(model)
 
@@ -95,6 +104,10 @@ class LivePlotter:
         self.setup_camera_ax()
         self.setup_sensor_ax()
         self.setup_mlh_ax()
+
+        self.save_dir = Path(save_dir) if save_dir is not None else None
+        if self.save_dir is not None:
+            self.save_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _has_nine_patches(model: Monty | None) -> bool:
@@ -192,6 +205,18 @@ class LivePlotter:
         if mlh_model:
             self.show_mlh(mlh, mlh_model)
         plt.pause(0.00001)
+        self._save_frame(step)
+
+    def _save_frame(self, step: int) -> None:
+        """Write the current figure to ``save_dir`` if one was configured.
+
+        Args:
+            step: Episode step index used in the filename.
+        """
+        if self.save_dir is None:
+            return
+        path = self.save_dir / f"step_{step:04d}.png"
+        self.fig.savefig(path, dpi=120, bbox_inches="tight")
 
     def show_view_finder(
         self,
