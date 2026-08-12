@@ -50,6 +50,5 @@ experiment:
           save_raw_obs: false
         sensor_module_9:
           save_raw_obs: true
-
-
-
+      monty_args:
+        copy_lm_0_to_all_lms: true

@@ -39,6 +39,7 @@ class MontyBase(Monty):
     LOGGING_REGISTRY: ClassVar[dict[str, type[BaseMontyLogger]]] = {"TEST": TestLogger}
 
     _is_done: bool
+    _copy_lm_0_to_all_lms: bool
 
     def __init__(
         self,
@@ -53,6 +54,7 @@ class MontyBase(Monty):
         min_train_steps,
         num_exploratory_steps,
         max_total_steps,
+        copy_lm_0_to_all_lms: bool = False,
     ) -> None:
         """Initialize the base class.
 
@@ -147,6 +149,7 @@ class MontyBase(Monty):
         self._actions: list[Action] = []
         self._goals: list[Goal] = []
         self._attention_system = AttentionSystem()
+        self._copy_lm_0_to_all_lms = copy_lm_0_to_all_lms
 
     @property
     def attention_system(self) -> AttentionSystem:
@@ -446,12 +449,21 @@ class MontyBase(Monty):
     ###
 
     def load_state_dict(self, memento: Memento) -> None:
-        assert len(memento["lm_dict"]) == len(self.learning_modules)
-        lm_counter = 0
-        lm_dict = memento["lm_dict"]
-        for lm_key in lm_dict:
-            self.learning_modules[lm_counter].load_state_dict(lm_dict[lm_key])
-            lm_counter = lm_counter + 1
+        if self._copy_lm_0_to_all_lms:
+            lm_dict = memento["lm_dict"]
+            for i, _ in enumerate(self.learning_modules):
+                cp = copy.deepcopy(lm_dict[0])
+                for o in cp["graph_memory"]:
+                    cp["graph_memory"][o][f"patch_{i}"] = cp["graph_memory"][o]["patch"]
+                    del cp["graph_memory"][o]["patch"]
+                self.learning_modules[i].load_state_dict(cp)
+        else:
+            assert len(memento["lm_dict"]) == len(self.learning_modules)
+            lm_counter = 0
+            lm_dict = memento["lm_dict"]
+            for lm_key in lm_dict:
+                self.learning_modules[lm_counter].load_state_dict(lm_dict[lm_key])
+                lm_counter = lm_counter + 1
 
     def state_dict(self) -> Memento:
         lm_dict = {
