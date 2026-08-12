@@ -1,0 +1,25 @@
+# @package experiment.config.monty_config
+
+sm_to_agent_dict:
+  patch_0: agent_id_0
+  patch_1: agent_id_0
+  patch_2: agent_id_0
+  patch_3: agent_id_0
+  patch_4: agent_id_0
+  patch_5: agent_id_0
+  patch_6: agent_id_0
+  patch_7: agent_id_0
+  patch_8: agent_id_0
+  view_finder: agent_id_0
+sm_to_lm_matrix:
+- - 0
+- - 1
+- - 2
+- - 3
+- - 4
+- - 5
+- - 6
+- - 7
+- - 8
+lm_to_lm_matrix: null
+lm_to_lm_vote_matrix: null
