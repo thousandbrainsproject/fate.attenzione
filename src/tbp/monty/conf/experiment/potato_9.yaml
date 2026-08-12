@@ -26,7 +26,7 @@ experiment:
     supervised_lm_ids: []
     python_log_level: DEBUG
     logging:
-      run_name: potato
+      run_name: potato_9
       detailed_save_per_episode: true
     monty_config:
       sensor_modules:
