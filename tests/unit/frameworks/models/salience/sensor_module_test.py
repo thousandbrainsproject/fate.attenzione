@@ -18,6 +18,7 @@ import pytest
 import quaternion as qt
 from parameterized import parameterized_class
 
+from tbp.monty.attention.attention_system import INITIAL_WEIGHT
 from tbp.monty.cmp import Goal
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.models.abstract_monty_classes import SensorObservation
@@ -232,10 +233,12 @@ class SalienceSMRegionTest(unittest.TestCase):
         # the segmentation.
         self.assertEqual(locations, [[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]])
 
-    def test_region_weights_carry_the_weighted_salience(self) -> None:
+    def test_region_weights_are_the_initial_attention_weight(self) -> None:
         self.step()
         region = self.sensor_module.propose_region()
-        self.assertEqual([aw.weight for aw in region], [0.1, 0.9])
+        self.assertEqual(
+            [aw.weight for aw in region], [INITIAL_WEIGHT, INITIAL_WEIGHT]
+        )
 
     def test_segmentation_strategy_receives_the_observation(self) -> None:
         self.step()

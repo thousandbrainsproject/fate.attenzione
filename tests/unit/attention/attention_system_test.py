@@ -42,64 +42,42 @@ def goal_at(location) -> Goal:
     )
 
 
-def attention_weight_at(location) -> AttentionWeight:
+def attention_weight_at(location, weight: float = 1.0) -> AttentionWeight:
     """Build an attention weight at the given location.
 
     Returns:
-        An attention weight whose only meaningful property here is its
-        location.
+        An attention weight whose only meaningful properties here are its
+        location and weight.
 
     """
     return AttentionWeight(
         location=None if location is None else np.asarray(location, dtype=float),
-        weight=1.0,
+        weight=weight,
         sender_id="SM_0",
         sender_type="SM",
     )
 
 
-def region(*locations) -> list[AttentionWeight]:
+def region(*locations, weight: float = 1.0) -> list[AttentionWeight]:
     """Build a region from the given locations.
 
     Returns:
         One region: a list with one attention weight per location.
 
     """
-    return [attention_weight_at(location) for location in locations]
+    return [attention_weight_at(location, weight) for location in locations]
 
 
-def column_by_voxel(
-    system: AttentionSystem, column: str
-) -> dict[tuple[int, int, int], int]:
-    """Map each occupied voxel to one of its column values.
-
-    Returns:
-        Voxel coordinate to value, for every voxel the system holds.
-
-    """
-    data = system.grid
-    voxels = [tuple(int(c) for c in index) for index in data.index]
-    return dict(zip(voxels, data[column].to_numpy().ravel().tolist()))
-
-
-def weights_by_voxel(system: AttentionSystem) -> dict[tuple[int, int, int], int]:
-    """Map each occupied voxel to its remaining weight.
+def weights_by_voxel(system: AttentionSystem) -> dict[tuple[int, int, int], float]:
+    """Map each occupied voxel to its current weight.
 
     Returns:
         Voxel coordinate to weight, for every voxel the system holds.
 
     """
-    return column_by_voxel(system, "weight")
-
-
-def counts_by_voxel(system: AttentionSystem) -> dict[tuple[int, int, int], int]:
-    """Map each occupied voxel to how many times it has been observed.
-
-    Returns:
-        Voxel coordinate to count, for every voxel the system holds.
-
-    """
-    return column_by_voxel(system, "count")
+    data = system.grid
+    voxels = [tuple(int(c) for c in index) for index in data.index]
+    return dict(zip(voxels, data["weight"].to_numpy().ravel().tolist()))
 
 
 class AttentionSystemGridTest(unittest.TestCase):
@@ -123,7 +101,8 @@ class AttentionSystemGridTest(unittest.TestCase):
         self.assertEqual(len(self.system.grid), 0)
 
     def test_a_step_adds_to_the_grid_rather_than_replacing_it(self) -> None:
-        self.system.step([], [region(*NEAR_POINTS)])
+        # Weight 2 so the near voxel survives the decay tick of the second step.
+        self.system.step([], [region(*NEAR_POINTS, weight=2.0)])
         self.system.step([], [region(FAR_POINT)])
         self.assertEqual(
             sorted(weights_by_voxel(self.system)), [NEAR_VOXEL, FAR_VOXEL]
@@ -142,26 +121,34 @@ class AttentionSystemGridTest(unittest.TestCase):
 
 
 class AttentionSystemWeightTest(unittest.TestCase):
-    """Voxels persist across steps, decaying until they are re-observed or expire."""
+    """Voxel weights start at the proposed mean, decay, and expire at zero."""
 
     def setUp(self) -> None:
         self.system = AttentionSystem(voxel_size=0.01, voxel_lifetime=3)
 
-    def observe_near(self) -> None:
+    def observe_near(self, weight: float = 3.0) -> None:
         """Observe the near voxel."""
-        self.system.step([], [region(NEAR_POINTS[0])])
+        self.system.step([], [region(NEAR_POINTS[0], weight=weight)])
 
     def observe_far(self) -> None:
         """Observe the far voxel."""
-        self.system.step([], [region(FAR_POINT)])
+        self.system.step([], [region(FAR_POINT, weight=3.0)])
 
-    def test_weight_starts_at_the_full_lifetime(self) -> None:
-        self.observe_near()
-        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 3)
+    def test_a_fresh_voxel_carries_the_proposed_weight(self) -> None:
+        self.observe_near(weight=2.0)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2.0)
 
-    def test_weight_is_stored_as_an_integer(self) -> None:
-        self.observe_near()
-        self.assertEqual(self.system.grid["weight"].to_numpy().dtype, np.int32)
+    def test_a_voxels_weight_is_the_mean_of_its_proposals(self) -> None:
+        self.system.step(
+            [],
+            [
+                [
+                    attention_weight_at(NEAR_POINTS[0], 1.0),
+                    attention_weight_at(NEAR_POINTS[1], 2.0),
+                ]
+            ],
+        )
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 1.5)
 
     def test_voxel_lifetime_is_exposed(self) -> None:
         self.assertEqual(AttentionSystem(voxel_lifetime=9).voxel_lifetime, 9)
@@ -179,15 +166,16 @@ class AttentionSystemWeightTest(unittest.TestCase):
     def test_an_unobserved_voxel_decays_by_one_step(self) -> None:
         self.observe_near()
         self.observe_far()
-        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2.0)
 
-    def test_a_re_observed_voxel_returns_to_a_full_weight(self) -> None:
+    def test_a_re_observed_voxel_accumulates_up_to_the_cap(self) -> None:
         self.observe_near()
         self.observe_far()
         self.observe_near()
-        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 3)
+        # decayed 3 -> 1 over two steps, + fresh 3, capped at lifetime 3.
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 3.0)
 
-    def test_a_voxel_expires_after_its_lifetime_of_steps(self) -> None:
+    def test_a_voxel_expires_once_its_weight_decays_to_zero(self) -> None:
         self.observe_near()
         for _ in range(3):
             self.observe_far()
@@ -196,7 +184,7 @@ class AttentionSystemWeightTest(unittest.TestCase):
     def test_observing_nothing_still_decays_the_grid(self) -> None:
         self.observe_near()
         self.system.step([], [])
-        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2)
+        self.assertEqual(weights_by_voxel(self.system)[NEAR_VOXEL], 2.0)
 
     def test_the_grid_empties_once_everything_expires(self) -> None:
         self.observe_near()
@@ -204,70 +192,26 @@ class AttentionSystemWeightTest(unittest.TestCase):
             self.system.step([], [])
         self.assertEqual(len(self.system.grid), 0)
 
-    def test_weight_stays_an_integer_across_steps(self) -> None:
-        self.observe_near()
-        self.observe_far()
-        self.assertEqual(self.system.grid["weight"].to_numpy().dtype, np.int32)
 
-
-class AttentionSystemCountTest(unittest.TestCase):
-    """Count tallies how many times a voxel has been observed."""
+class AttentionSystemInhibitionTest(unittest.TestCase):
+    """A -inf proposal vetoes its voxel regardless of co-proposals."""
 
     def setUp(self) -> None:
         self.system = AttentionSystem(voxel_size=0.01, voxel_lifetime=3)
 
-    def observe_near(self) -> None:
-        """Observe the near voxel."""
-        self.system.step([], [region(NEAR_POINTS[0])])
-
-    def observe_far(self) -> None:
-        """Observe the far voxel."""
-        self.system.step([], [region(FAR_POINT)])
-
-    def test_a_newly_seen_voxel_starts_at_one(self) -> None:
-        self.observe_near()
-        self.assertEqual(counts_by_voxel(self.system)[NEAR_VOXEL], 1)
-
-    def test_re_observing_adds_to_the_count(self) -> None:
-        for expected in (1, 2, 3):
-            self.observe_near()
-            self.assertEqual(counts_by_voxel(self.system)[NEAR_VOXEL], expected)
-
-    def test_an_unobserved_voxel_keeps_its_count(self) -> None:
-        self.observe_near()
-        self.observe_near()
-        self.observe_far()
-        counts = counts_by_voxel(self.system)
-        self.assertEqual(counts[NEAR_VOXEL], 2)
-        self.assertEqual(counts[FAR_VOXEL], 1)
-
-    def test_counts_are_tallied_independently_per_voxel(self) -> None:
-        self.observe_near()
-        self.observe_far()
-        self.observe_far()
-        counts = counts_by_voxel(self.system)
-        self.assertEqual(counts[NEAR_VOXEL], 1)
-        self.assertEqual(counts[FAR_VOXEL], 2)
-
-    def test_each_region_seeing_a_voxel_contributes_a_sighting(self) -> None:
-        # Two modules propose overlapping regions on the same step.
-        self.system.step([], [region(NEAR_POINTS[0]), region(NEAR_POINTS[1])])
-        self.assertEqual(counts_by_voxel(self.system)[NEAR_VOXEL], 2)
-
-    def test_count_restarts_after_a_voxel_expires(self) -> None:
-        # An expired voxel is forgotten, so its tally starts over.
-        self.observe_near()
-        self.observe_near()
-        for _ in range(3):
-            self.system.step([], [])
+    def test_an_inhibited_voxel_is_removed_despite_co_proposals(self) -> None:
+        positive = [
+            attention_weight_at(NEAR_POINTS[0], 3.0),
+            attention_weight_at(NEAR_POINTS[1], 3.0),
+        ]
+        inhibition = [attention_weight_at(NEAR_POINTS[0], -np.inf)]
+        self.system.step([], [inhibition, positive])
         self.assertEqual(len(self.system.grid), 0)
-        self.observe_near()
-        self.assertEqual(counts_by_voxel(self.system)[NEAR_VOXEL], 1)
 
-    def test_count_stays_an_integer_across_steps(self) -> None:
-        self.observe_near()
-        self.observe_near()
-        self.assertEqual(self.system.grid["count"].to_numpy().dtype, np.int32)
+    def test_inhibition_removes_a_remembered_voxel(self) -> None:
+        self.system.step([], [region(NEAR_POINTS[0], weight=3.0)])
+        self.system.step([], [region(NEAR_POINTS[0], weight=-np.inf)])
+        self.assertEqual(len(self.system.grid), 0)
 
 
 class AttentionSystemContainsTest(unittest.TestCase):
@@ -331,15 +275,19 @@ class AttentionSystemFilterTest(unittest.TestCase):
         self.assertEqual(returned, [unlocated])
 
     def test_a_remembered_voxel_still_admits_goals(self) -> None:
-        self.system.step([], [region(NEAR_POINTS[0])])
+        self.system.step([], [region(NEAR_POINTS[0], weight=3.0)])
         goal = goal_at(NEAR_POINTS[0])
         # The near voxel was not re-observed, but has not expired either.
-        self.assertEqual(self.system.step([goal], [region(FAR_POINT)]), [goal])
+        self.assertEqual(
+            self.system.step([goal], [region(FAR_POINT, weight=3.0)]), [goal]
+        )
 
     def test_an_expired_voxel_no_longer_admits_goals(self) -> None:
-        self.system.step([], [region(NEAR_POINTS[0])])
+        self.system.step([], [region(NEAR_POINTS[0], weight=3.0)])
         goal = goal_at(NEAR_POINTS[0])
         for _ in range(2):
-            self.system.step([], [region(FAR_POINT)])
+            self.system.step([], [region(FAR_POINT, weight=3.0)])
         # This step decays the near voxel past its lifetime before filtering.
-        self.assertEqual(self.system.step([goal], [region(FAR_POINT)]), [])
+        self.assertEqual(
+            self.system.step([goal], [region(FAR_POINT, weight=3.0)]), []
+        )
