@@ -23,6 +23,7 @@ from hypothesis import strategies as st
 from unittest_parametrize import ParametrizedTestCase, parametrize
 
 from tbp.monty.cmp import Goal, Message
+from tbp.monty.constants import MAX_PERCEPT_DISTANCE
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.actions.action_samplers import UniformlyDistributedSampler
 from tbp.monty.frameworks.actions.actions import (
@@ -349,7 +350,7 @@ class JumpToGoalTest(ParametrizedTestCase):
         with patch(
             "tbp.monty.frameworks.models.motor_policies.PositioningProcedure.depth_at_center"
         ) as depth_at_center_mock:
-            depth_at_center_mock.return_value = 1.0
+            depth_at_center_mock.return_value = MAX_PERCEPT_DISTANCE
             policy = JumpToGoal(self.agent_id, SensorID("view_finder"))
             policy(
                 ctx=Mock(),
@@ -418,7 +419,7 @@ class JumpToGoalTest(ParametrizedTestCase):
     )
     @patch(
         "tbp.monty.frameworks.models.motor_policies.PositioningProcedure.depth_at_center",
-        return_value=0.99,
+        return_value=MAX_PERCEPT_DISTANCE - 0.01,
     )
     def test_returns_new_jump_actions_status_in_progress_if_undo_is_not_needed_after_jump_and_goal_is_provided(  # noqa: E501
         self,
@@ -499,7 +500,7 @@ class JumpToGoalTest(ParametrizedTestCase):
 
     @patch(
         "tbp.monty.frameworks.models.motor_policies.PositioningProcedure.depth_at_center",
-        return_value=0.99,
+        return_value=MAX_PERCEPT_DISTANCE - 0.01,
     )
     def test_returns_no_actions_status_ready_if_undo_is_not_needed_after_jump_and_goal_is_none(  # noqa: E501
         self,

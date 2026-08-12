@@ -105,6 +105,9 @@ class AttentionSystem:
             indices.append(i)
             locations.append(p.location)
 
+        if not locations:
+            return percepts
+
         locations = np.stack(locations)
         contained = self.contains_points(locations)
         for i, c in enumerate(contained):

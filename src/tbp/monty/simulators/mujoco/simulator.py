@@ -245,14 +245,18 @@ class MuJoCoSimulator(SimulatedObjectEnvironment):
 
         # Configure the headlight to produce the ambient lighting we want on
         # the back of the objects.
-        self.spec.visual.headlight.ambient = (0.5, 0.5, 0.5)
+        self.spec.visual.headlight.ambient = (0.32, 0.32, 0.32)
         self.spec.visual.headlight.diffuse = (0.0, 0.0, 0.0)
         self.spec.visual.headlight.specular = (0.0, 0.0, 0.0)
         # Add a directional light on the "front" side of the object.
+        # Specular is zero so surface brightness is view-independent: rendered
+        # highlights slide across surfaces as the agent moves, which bakes
+        # viewpoint into the sensed features. (Highlights painted into object
+        # textures are unaffected by this.)
         self.spec.worldbody.add_light(
             pos=(0, 0.0, 0.2),
-            diffuse=(0.6, 0.6, 0.6),
-            specular=(0.1, 0.1, 0.1),
+            diffuse=(0.4, 0.4, 0.4),
+            specular=(0.0, 0.0, 0.0),
             type=mjtLightType.mjLIGHT_DIRECTIONAL,
         )
 

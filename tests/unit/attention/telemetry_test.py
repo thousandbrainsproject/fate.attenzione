@@ -30,47 +30,53 @@ class AttentionSystemTelemetryTest(unittest.TestCase):
             voxel_size=0.01, voxel_lifetime=2, telemetry=self.telemetry
         )
 
-    def test_each_step_records_a_snapshot(self) -> None:
-        self.system.step([], [region(NEAR_POINT, weight=2.0)])
-        self.system.step([], [region(FAR_POINT, weight=2.0)])
+    def step(self, *regions) -> None:
+        """Run one update-then-filter cycle, as MontyBase sequences it."""
+        self.system.update_regions(list(regions))
+        self.system.filter_goals([])
+
+    def test_each_filter_records_a_snapshot(self) -> None:
+        self.step(region(NEAR_POINT, weight=2.0))
+        self.step(region(FAR_POINT, weight=2.0))
         self.assertEqual(len(self.telemetry.voxel_grids), 2)
 
     def test_a_snapshot_is_unaffected_by_later_steps(self) -> None:
-        self.system.step([], [region(NEAR_POINT, weight=2.0)])
-        self.system.step([], [region(FAR_POINT, weight=2.0)])
+        self.step(region(NEAR_POINT, weight=2.0))
+        self.step(region(FAR_POINT, weight=2.0))
         self.assertEqual(len(self.telemetry.voxel_grids[0]), 1)
         self.assertEqual(len(self.telemetry.voxel_grids[1]), 2)
 
     def test_reset_discards_the_snapshots(self) -> None:
-        self.system.step([], [region(NEAR_POINT, weight=2.0)])
+        self.step(region(NEAR_POINT, weight=2.0))
         self.system.reset()
         self.assertEqual(len(self.telemetry.voxel_grids), 0)
 
     def test_state_dict_flattens_each_snapshot_into_arrays(self) -> None:
-        self.system.step([], [region(NEAR_POINT, weight=2.0)])
-        self.system.step([], [region(NEAR_POINT, FAR_POINT, weight=2.0)])
+        self.step(region(NEAR_POINT, weight=2.0))
+        self.step(region(NEAR_POINT, FAR_POINT, weight=2.0))
         snapshot = self.system.state_dict()["voxel_grids"][1]
         np.testing.assert_array_equal(snapshot["voxels"], [[0, 0, 0], [50, 0, 0]])
         np.testing.assert_array_equal(snapshot["weight"], [2, 2])
 
     def test_an_empty_grid_snapshot_is_exported_empty(self) -> None:
-        self.system.step([], [region(NEAR_POINT, weight=2.0)])
-        # Two empty steps decay the voxel past its lifetime of 2.
-        self.system.step([], [])
-        self.system.step([], [])
+        self.step(region(NEAR_POINT, weight=2.0))
+        # Two empty updates decay the voxel past its lifetime of 2.
+        self.step()
+        self.step()
         snapshot = self.system.state_dict()["voxel_grids"][2]
         self.assertEqual(len(snapshot["voxels"]), 0)
         self.assertEqual(len(snapshot["weight"]), 0)
 
     def test_state_dict_is_json_encodable(self) -> None:
-        self.system.step([], [region(NEAR_POINT, weight=2.0)])
-        self.system.step([], [])
+        self.step(region(NEAR_POINT, weight=2.0))
+        self.step()
         encoded = json.loads(json.dumps(self.system.state_dict(), cls=BufferEncoder))
         self.assertEqual(encoded["voxel_grids"][0]["voxels"], [[0, 0, 0]])
 
     def test_a_default_telemetry_is_created_when_none_is_supplied(self) -> None:
         system = AttentionSystem(voxel_size=0.01)
-        system.step([], [region(NEAR_POINT, weight=2.0)])
+        system.update_regions([region(NEAR_POINT, weight=2.0)])
+        system.filter_goals([])
         self.assertEqual(len(system.state_dict()["voxel_grids"]), 1)
 
     def test_state_dict_carries_the_grid_geometry(self) -> None:

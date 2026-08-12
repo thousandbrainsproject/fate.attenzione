@@ -701,6 +701,16 @@ class FateAttenzioneInterface(Interface):
         # not calling super, because not using rng
         self.env.remove_all_objects()
 
+        # The room encloses the agent and every object, so all sensor pixels
+        # land on a surface within MAX_PERCEPT_DISTANCE. Shifted back so the
+        # rear wall sits ~1m behind the objects: up close its bricks render
+        # magnified and bright, far brighter than the grazing-angle side walls.
+        self.env.add_object(
+            name="room",
+            position=np.array([0, 0.8, 0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+
         primary_target = self.env.add_object(
             name="mug",
             position=np.array([0, 1.5, 0.08]),
