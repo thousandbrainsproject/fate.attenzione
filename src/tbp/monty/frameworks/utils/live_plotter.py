@@ -62,17 +62,24 @@ class LivePlotter:
         # Build mixed 2D/3D axes explicitly. plt.subplots() leaves an orphaned 2D
         # axis behind if we later replace a slot with projection="3d".
         if self._nine_patch_mode:
-            self.fig = plt.figure(figsize=(12, 6))
-            self.fig.subplots_adjust(top=0.92, wspace=0.25)
-            gs = gridspec.GridSpec(1, 3, figure=self.fig, width_ratios=[1.0, 1.3, 1.0])
-            camera_ax = self.fig.add_subplot(gs[0, 0])
-            patch_gs = gs[0, 1].subgridspec(3, 3, wspace=0.08, hspace=0.25)
+            self.fig = plt.figure(figsize=(10, 5.5))
+            self.fig.subplots_adjust(top=0.9, wspace=0.2, hspace=0.15)
+            # Narrow middle column, with vertical padding so the 3x3 stays compact.
+            gs = gridspec.GridSpec(
+                3,
+                3,
+                figure=self.fig,
+                width_ratios=[1.2, 0.65, 1.2],
+                height_ratios=[0.18, 0.64, 0.18],
+            )
+            camera_ax = self.fig.add_subplot(gs[:, 0])
+            patch_gs = gs[1, 1].subgridspec(3, 3, wspace=0.05, hspace=0.2)
             self.patch_axes = [
                 self.fig.add_subplot(patch_gs[row, col])
                 for row in range(3)
                 for col in range(3)
             ]
-            mlh_ax = self.fig.add_subplot(gs[0, 2], projection="3d")
+            mlh_ax = self.fig.add_subplot(gs[:, 2], projection="3d")
             # Keep self.ax[0]/[2] as camera / MLH; middle slot unused in 9-patch mode.
             self.ax = [camera_ax, None, mlh_ax]
         else:
