@@ -553,7 +553,27 @@ class MontyExperiment:
         self.logger_handler.pre_episode(self.logger_args)
 
         if self.show_sensor_output:
-            self.live_plotter.initialize_online_plotting(self.model)
+            self.live_plotter.initialize_online_plotting(
+                model=self.model,
+                save_dir=self._live_plot_save_dir(),
+            )
+
+    def _live_plot_save_dir(self) -> Path:
+        """Directory for per-step live plotter frames for the current episode.
+
+        Returns:
+            ``{output_dir}/visualizations/live_plotter/{mode}_episode_{N}``.
+        """
+        if self.experiment_mode is ExperimentMode.TRAIN:
+            mode, episode = "train", self.train_episodes
+        else:
+            mode, episode = "eval", self.eval_episodes
+        return (
+            Path(self.output_dir)
+            / "visualizations"
+            / "live_plotter"
+            / f"{mode}_episode_{episode:03d}"
+        )
 
     def post_episode(self, steps) -> None:
         """Call post_episode on elements in experiment and increment counters.
