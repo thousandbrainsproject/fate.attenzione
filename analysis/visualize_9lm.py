@@ -17,9 +17,14 @@ Three panels, step by step:
   cross-LM agreement is visible at a glance; the red dot is the hypothesized
   sensor location on the model.
 
-Patches and MLH tiles are greyed out on steps where their LM did not
-process (mirroring the live plotter's dimming), using ``lm_processed_steps``
-from the stats.
+A second row holds a per-LM status table: MLH object (cell tinted with the
+object's cloud color), MLH evidence, whether the LM sent a GSG goal this
+step (from the attention telemetry's ``pre_filter_goals``), and whether it
+sent an inhibitory region this step (from the attention telemetry's
+``inhibitory_senders``; absent in runs predating it). A patch greys out on
+steps where attention filtered its percept (``filtered_percepts`` in the
+attention telemetry; absent in runs predating it); MLH tiles and table rows
+grey out on steps where their LM did not process (``lm_processed_steps``).
 
 The object point clouds come from the pretrained model the experiment
 loaded (``--model-path``), since learned graphs are not part of the
@@ -45,7 +50,14 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
 
 from detailed_stats import available_episodes, extract_rgba, load_episode_stats
-from visualize_3d import OKABE_ITO, LMEvidence, SMTelemetry
+from visualize_3d import (
+    OKABE_ITO,
+    AttentionTelemetry,
+    LMEvidence,
+    SMTelemetry,
+    _bounds,
+)
+from visualize_goal_filtering import GoalFilteringTelemetry, interior_points
 
 DEFAULT_EXP_DIR = (
     Path(os.environ.get("MONTY_LOGS", "~/tbp/results/monty")).expanduser()
@@ -117,6 +129,89 @@ def object_colors(lms: dict[int, LMEvidence]) -> dict[str, str]:
     }
 
 
+def filtered_patches_per_step(stats: dict) -> list[set[int]]:
+    """Find which patches' percepts were filtered by attention on each step.
+
+    Filtered percepts are recorded by sender id (the sensor module id, e.g.
+    ``patch_4``) in the attention telemetry.
+
+    Args:
+        stats: Loaded episode stats.
+
+    Returns:
+        One set of patch indices per step; empty if the run predates the
+        ``filtered_percepts`` telemetry.
+    """
+    per_step = []
+    for filtered in stats.get("attention_system", {}).get("filtered_percepts", []):
+        patches = set()
+        for sender_id in filtered:
+            suffix = str(sender_id).rsplit("_", 1)[-1]
+            if suffix.isdigit():
+                patches.add(int(suffix))
+        per_step.append(patches)
+    return per_step
+
+
+def inhibiting_lms_per_step(stats: dict, n_frames: int) -> list[set[int]]:
+    """Find which LMs sent an inhibitory region on each step.
+
+    The attention system records the senders of negative-weight regions
+    (``inhibitory_senders``, sender ids like ``learning_module_3``) once per
+    ``update_regions`` call, and that runs more than once per step (once with
+    SM regions, once with LM regions). Entries are therefore chunked evenly
+    across frames and unioned within each chunk.
+
+    Args:
+        stats: Loaded episode stats.
+        n_frames: Number of animation frames, for the chunked mapping.
+
+    Returns:
+        One set of LM indices per frame; empty if the run predates the
+        ``inhibitory_senders`` telemetry.
+    """
+    entries = stats.get("attention_system", {}).get("inhibitory_senders", [])
+    if not entries or n_frames <= 0:
+        return []
+    ratio = max(1, round(len(entries) / n_frames))
+    per_step = []
+    for frame in range(n_frames):
+        senders = set()
+        for filtered in entries[frame * ratio : (frame + 1) * ratio]:
+            for sender_id in filtered:
+                suffix = str(sender_id).rsplit("_", 1)[-1]
+                if suffix.isdigit():
+                    senders.add(int(suffix))
+        per_step.append(senders)
+    return per_step
+
+
+def gsg_senders_per_step(stats: dict) -> list[set[int]]:
+    """Find which LMs sent a GSG goal on each step.
+
+    GSG goals carry ``sender_id = learning_module_id`` (e.g.
+    ``learning_module_3``) and ride in the attention telemetry's pre-filter
+    goals.
+
+    Args:
+        stats: Loaded episode stats.
+
+    Returns:
+        One set of LM indices per step.
+    """
+    per_step = []
+    for goals in stats.get("attention_system", {}).get("pre_filter_goals", []):
+        senders = set()
+        for g in goals:
+            if g.get("sender_type") != "GSG":
+                continue
+            suffix = str(g.get("sender_id", "")).rsplit("_", 1)[-1]
+            if suffix.isdigit():
+                senders.add(int(suffix))
+        per_step.append(senders)
+    return per_step
+
+
 def grey_out(rgba: np.ndarray) -> np.ndarray:
     """Dim a patch image the way the live plotter dims filtered patches.
 
@@ -172,17 +267,75 @@ def create_9lm_animation(
     colors = object_colors(lms)
     clouds = load_object_clouds(model_path)
     mlhs = {i: stats.get(f"LM_{i}", {}).get("current_mlh", []) for i in range(9)}
+    gsg_steps = gsg_senders_per_step(stats)
+    filtered_steps = filtered_patches_per_step(stats)
+    inhibition_steps = inhibiting_lms_per_step(stats, n_frames)
     processed = {
         i: np.asarray(stats.get(f"LM_{i}", {}).get("lm_processed_steps", []),
                       dtype=bool)
         for i in range(9)
     }
 
-    fig = plt.figure(figsize=(19, 6.5))
-    grid = fig.add_gridspec(1, 3, width_ratios=[1.15, 1.0, 1.0], wspace=0.15)
+    attention = AttentionTelemetry(stats, feature="weight")
+
+    fig = plt.figure(figsize=(19, 10))
+    outer = fig.add_gridspec(2, 1, height_ratios=[2.0, 1.1], hspace=0.12)
+    grid = outer[0].subgridspec(1, 3, width_ratios=[1.15, 1.0, 1.0], wspace=0.15)
     ax_camera = fig.add_subplot(grid[0, 0])
     patch_grid = grid[0, 1].subgridspec(3, 3, wspace=0.05, hspace=0.08)
     mlh_grid = grid[0, 2].subgridspec(3, 3, wspace=0.05, hspace=0.08)
+    bottom = outer[1].subgridspec(1, 2, width_ratios=[1.5, 1.0], wspace=0.15)
+    ax_table = fig.add_subplot(bottom[0, 0])
+    ax_table.axis("off")
+    ax_voxels = fig.add_subplot(bottom[0, 1], projection="3d")
+
+    # Voxel grid styling mirrors visualize_3d: fixed diverging scale centered
+    # on zero (red = repulsion, blue = attraction). Bounds are the object
+    # neighborhood as the goal scripts define it -- the interior of the goal
+    # cloud, which excludes the room's surfaces -- because attended wall and
+    # floor voxels accumulate across the episode and would otherwise stretch
+    # the view to room scale. Off-view voxels are counted in the title.
+    lifetime = float(attention.voxel_lifetime or 1)
+    # Two anchors reliably mark the object neighborhood: the first frame's
+    # goal-cloud interior (episodes start fixated on the primary target), and
+    # the negative-weight voxels (inhibition marks recognized objects).
+    anchors = []
+    goal_steps = GoalFilteringTelemetry(stats).pre
+    if goal_steps and len(goal_steps[0]):
+        anchors.extend(interior_points([goal_steps[0]]))
+    negative = [
+        c[w < 0]
+        for c, w in zip(attention.centres, attention.values)
+        if len(c) and (w < 0).any()
+    ]
+    if negative:
+        anchors.append(np.vstack(negative))
+    if not anchors:
+        anchors = [c for c in attention.centres if len(c)]
+    vox_bounds = _bounds(anchors)
+    vox_low = np.array([vox_bounds[0][0], vox_bounds[1][0], vox_bounds[2][0]])
+    vox_high = np.array([vox_bounds[0][1], vox_bounds[1][1], vox_bounds[2][1]])
+
+    def style_voxels() -> None:
+        ax_voxels.set_xlim(vox_bounds[0])
+        ax_voxels.set_ylim(vox_bounds[1])
+        ax_voxels.set_zlim(vox_bounds[2])
+        ax_voxels.set_box_aspect([1, 1, 1])
+        # Top-down, as in visualize_3d's voxel panel.
+        ax_voxels.view_init(elev=90, azim=-90)
+        ax_voxels.set_xticklabels([])
+        ax_voxels.set_yticklabels([])
+        ax_voxels.set_zticklabels([])
+
+    style_voxels()
+    voxel_anchor = ax_voxels.scatter(
+        [], [], [], c=[], cmap="RdBu", s=4, alpha=0.8,
+        vmin=-lifetime, vmax=lifetime,
+    )
+    voxel_bar = plt.colorbar(
+        voxel_anchor, ax=ax_voxels, fraction=0.046, pad=0.08
+    )
+    voxel_bar.set_label("voxel weight", rotation=270, labelpad=12)
 
     fig.suptitle("9-LM Overview", fontsize=14, fontweight="bold")
 
@@ -219,6 +372,7 @@ def create_9lm_animation(
                 patch_images[idx] = ax.imshow(rgbas[0])
 
             mlh_axes[idx] = fig.add_subplot(mlh_grid[row, col], projection="3d")
+
 
     def draw_mlh(idx: int, frame: int) -> None:
         ax = mlh_axes[idx]
@@ -271,29 +425,108 @@ def create_9lm_animation(
         # with y as screen-up, viewed from the training camera's side: an
         # identity pose renders the object upright exactly as it was learned.
         ax.view_init(elev=0, azim=-90, vertical_axis="y")
-        evidence = float(mlh.get("evidence", 0.0))
-        ax.text2D(
-            0.5, -0.08, f"{graph_id} {evidence:.1f}",
-            transform=ax.transAxes, ha="center", fontsize=7,
-            color="black" if voting else "0.6",
+
+    def draw_table(step: int, senders: set[int]) -> None:
+        """Rebuild the per-LM status table for one step."""
+        ax_table.clear()
+        ax_table.axis("off")
+        cells = []
+        cell_colors = []
+        for i in range(9):
+            lme = lms[i]
+            lm_step = lme.step_for_frame(step)
+            per_step = mlhs[i]
+            if 0 <= lm_step < len(per_step):
+                mlh = per_step[lm_step]
+                graph_id = str(mlh.get("graph_id", "—"))
+                evidence = f"{float(mlh.get('evidence', 0.0)):.2f}"
+            else:
+                graph_id, evidence = "—", "—"
+            inhibiting = (
+                step < len(inhibition_steps) and i in inhibition_steps[step]
+            )
+            cells.append(
+                [
+                    graph_id,
+                    evidence,
+                    "✓" if i in senders else "",
+                    "✓" if inhibiting else "",
+                ]
+            )
+            object_color = (
+                mcolors.to_rgba(colors[graph_id], alpha=0.45)
+                if graph_id in colors
+                else "white"
+            )
+            cell_colors.append(
+                [
+                    object_color,
+                    "white",
+                    "white",
+                    mcolors.to_rgba("firebrick", alpha=0.3)
+                    if inhibiting
+                    else "white",
+                ]
+            )
+        table = ax_table.table(
+            cellText=cells,
+            cellColours=cell_colors,
+            rowLabels=[f"LM_{i}" for i in range(9)],
+            colLabels=("MLH object", "MLH evidence", "goal sent", "inhibition"),
+            cellLoc="center",
+            loc="center",
+            colWidths=(0.28, 0.16, 0.12, 0.12),
         )
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 1.15)
+        # Grey the rows of LMs that did not process this step.
+        for i in range(9):
+            voting = step < len(processed[i]) and bool(processed[i][step])
+            if not voting:
+                for col in range(4):
+                    table[i + 1, col].get_text().set_color("0.6")
 
     def update_frame(step: int):
         camera_image.set_data(view.overlay(step))
         label = "Frame" if not view.has_segmentation else "Frame + Segmentation"
         ax_camera.set_title(f"{label} (Step {step}/{n_frames - 1})")
 
+        # A patch greys out when attention filtered its percept this step.
+        filtered = filtered_steps[step] if step < len(filtered_steps) else set()
         for idx, image in patch_images.items():
             rgbas = patch_rgbas[idx]
             if image is None or step >= len(rgbas):
                 continue
-            voting = (
-                step < len(processed[idx]) and bool(processed[idx][step])
+            image.set_data(
+                grey_out(rgbas[step]) if idx in filtered else rgbas[step]
             )
-            image.set_data(rgbas[step] if voting else grey_out(rgbas[step]))
 
+        senders = gsg_steps[step] if step < len(gsg_steps) else set()
         for idx in mlh_axes:
             draw_mlh(idx, step)
+        draw_table(step, senders)
+
+        ax_voxels.clear()
+        style_voxels()
+        centres, weights = attention.voxels_at(step)
+        if len(centres):
+            # Crop to the robust bounds: 3D axes don't clip scatters, so
+            # far-flung inhibition voxels would bleed across the figure.
+            in_view = ((centres >= vox_low) & (centres <= vox_high)).all(axis=1)
+            shown, shown_weights = centres[in_view], weights[in_view]
+            if len(shown):
+                ax_voxels.scatter(
+                    shown[:, 0], shown[:, 1], shown[:, 2],
+                    c=shown_weights, cmap="RdBu", s=6, alpha=0.8,
+                    vmin=-lifetime, vmax=lifetime,
+                )
+            ax_voxels.set_title(
+                f"Attention grid ({len(shown)}/{len(centres)} voxels in view)",
+                fontsize=9,
+            )
+        else:
+            ax_voxels.set_title("Attention grid (empty)", fontsize=9)
         return []
 
     anim = FuncAnimation(
