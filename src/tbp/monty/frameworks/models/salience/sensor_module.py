@@ -11,9 +11,12 @@ from __future__ import annotations
 from collections import deque
 
 import numpy as np
+import numpy.typing as npt
+import pandas as pd
 import quaternion as qt
 
 from tbp.monty.attention.attention_system import INITIAL_WEIGHT
+from tbp.monty.attention.voxels import VOXEL_LEVELS, voxelize_and_bin_points
 from tbp.monty.cmp import AttentionWeight, Goal
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.models.abstract_monty_classes import (
@@ -93,6 +96,10 @@ def _keep_center_cluster(
 
 
 class SalienceSM(SensorModule):
+    _salience3d: pd.Series
+    _salience3d_diff_threshold: float = 0.1
+    _voxel_size: float = 0.01
+
     def __init__(
         self,
         sensor_module_id: str,
@@ -120,6 +127,9 @@ class SalienceSM(SensorModule):
         self._region: list[AttentionWeight] = []
         # TODO: Goes away once experiment code is extracted
         self.is_exploring = False
+
+        self._previous_salience3d: pd.Series | None = None
+        self._salience3d_diff = empty_salience3d()
 
     @property
     def sensor_module_id(self) -> str:
@@ -166,6 +176,9 @@ class SalienceSM(SensorModule):
         )
 
         on_object = on_object_observation(observation, salience_map)
+
+        self._salience3d_diff = self._step_salience3d(on_object)
+
         ior_weights = self._return_inhibitor(
             on_object.center_location, on_object.locations
         )
@@ -195,6 +208,17 @@ class SalienceSM(SensorModule):
                     observation, self.state.rotation, self.state.position
                 )
             self._snapshot_telemetry.record(segmentation_map, self._region)
+
+    def _step_salience3d(self, on_object: OnObjectObservation) -> pd.Series:
+        current = salience3d(on_object.locations, on_object.salience, self._voxel_size)
+
+        previous = self._previous_salience3d
+        self._previous_salience3d = current
+        if previous is None:
+            return empty_salience3d()
+
+        diff = current.sub(previous, fill_value=0).abs()
+        return diff[diff > self._salience3d_diff_threshold]
 
     def _segment_region(
         self,
@@ -291,6 +315,30 @@ class SalienceSM(SensorModule):
         self._return_inhibitor.reset()
         self._snapshot_telemetry.reset()
         self.is_exploring = False
+        self._previous_salience3d = None
+        self._salience3d_diff = empty_salience3d()
 
     def propose_goals(self) -> list[Goal]:
         return self._goals
+
+def empty_salience3d() -> pd.Series:
+    return pd.Series(
+        dtype=float,
+        index=pd.MultiIndex.from_tuples([], names=VOXEL_LEVELS),
+    )
+
+
+def salience3d(
+    locations: np.ndarray,
+    salience: np.ndarray,
+    voxel_size: float,
+) -> pd.Series:
+    covoxel_points = voxelize_and_bin_points(locations, voxel_size)
+    if not covoxel_points:
+        return empty_salience3d()
+
+    return pd.Series(
+        [np.mean(salience[indices]) for indices in covoxel_points.values()],
+        index=pd.MultiIndex.from_tuples(covoxel_points.keys(), names=VOXEL_LEVELS),
+        dtype=float,
+    )
