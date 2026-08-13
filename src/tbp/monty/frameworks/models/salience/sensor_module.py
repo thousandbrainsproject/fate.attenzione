@@ -53,9 +53,9 @@ def _keep_center_cluster(
 
     neighbor_offsets = ((-1, 0), (1, 0), (0, -1), (0, 1))
     center_location = locations_map[center_row, center_col]
-    neighbor_dists = []
-    # TODO: may need to look at more than 4 neighbors for case where center pixel is on
-    # an edge.
+    # Add 0.0 to handle case where two of the distances are very large (center pixel is
+    # on an edge, so that we don't average the 2 small distances with the large ones)
+    neighbor_dists = [0.0]
     for d_row, d_col in neighbor_offsets:
         neighbor_row, neighbor_col = center_row + d_row, center_col + d_col
         if not (0 <= neighbor_row < height and 0 <= neighbor_col < width):
