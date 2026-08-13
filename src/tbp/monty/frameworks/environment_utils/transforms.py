@@ -18,6 +18,7 @@ import numpy.typing as npt
 import quaternion as qt
 import scipy
 
+from tbp.monty.constants import MAX_PERCEPT_DISTANCE
 from tbp.monty.frameworks.agents import AgentID
 from tbp.monty.frameworks.models.abstract_monty_classes import Observations
 from tbp.monty.frameworks.models.motor_system_state import ProprioceptiveState
@@ -69,14 +70,16 @@ class MissingToMaxDepth(Transform):
     def __init__(
         self,
         agent_id: AgentID,
-        max_depth: float,
+        max_depth: float = MAX_PERCEPT_DISTANCE,
         threshold: float = 0.0,
     ):
         """Initialize the transform.
 
         Args:
             agent_id: agent id of the agent where the transform should be applied.
-            max_depth: numeric that will replace missing
+            max_depth: numeric that will replace missing. Defaults to
+                MAX_PERCEPT_DISTANCE so that downstream off-object checks
+                against that constant treat the void as off-object.
             threshold: (optional) numeric, anything less than this is counted as
                 missing. Defaults to 0.0.
         """
@@ -557,10 +560,11 @@ class DepthTo3DLocations(Transform):
                 semantic_patch = agent_obs["semantic"]
             else:
                 # The generated map uses depth observations to determine whether
-                # pixels are on object using 1 meter as a threshold since
-                # `MissingToMaxDepth` sets the background void to 1.
+                # pixels are on object, using MAX_PERCEPT_DISTANCE as the
+                # threshold since `MissingToMaxDepth` sets the background void
+                # to that value.
                 semantic_patch = np.ones_like(depth_patch, dtype=int)
-                semantic_patch[depth_patch >= 1] = 0
+                semantic_patch[depth_patch >= MAX_PERCEPT_DISTANCE] = 0
 
             # Apply depth clipping to the surface agent, and initialize the
             # surface-separation threshold for later use.
@@ -784,11 +788,11 @@ class DepthTo3DLocations(Transform):
         # avoid large range when seeing the table (goes up to almost 100 and then
         # just using 8 bins will not work anymore)
         depth_patch = np.array(depth_patch)
-        depth_patch[depth_patch > 1] = 1.0
+        depth_patch[depth_patch > MAX_PERCEPT_DISTANCE] = MAX_PERCEPT_DISTANCE
 
-        # If all depth values are at maximum (1.0), then we are automatically
-        # off-object.
-        if np.all(depth_patch >= 1.0):
+        # If all depth values are at maximum (MAX_PERCEPT_DISTANCE), then we are
+        # automatically off-object.
+        if np.all(depth_patch >= MAX_PERCEPT_DISTANCE):
             return np.zeros_like(depth_patch, dtype=bool)
 
         # Compute the on-surface depth threshold (and whether we need to flip the

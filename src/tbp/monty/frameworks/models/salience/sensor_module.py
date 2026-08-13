@@ -8,6 +8,8 @@
 # https://opensource.org/licenses/MIT.
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 import quaternion as qt
 
@@ -36,6 +38,58 @@ from tbp.monty.frameworks.sensors import SensorID
 from tbp.monty.memento import Memento
 
 __all__ = ["SalienceSM"]
+
+
+def _keep_center_cluster(
+    surface_mask: np.ndarray,
+    locations_map: np.ndarray,
+) -> np.ndarray:
+    # Grow a cluster from the patch center through neighboring pixels.
+    # Stop when the 3D step exceeds twice the median 3D spacing around the center.
+    height, width = surface_mask.shape
+    center_row, center_col = height // 2, width // 2
+    if not surface_mask[center_row, center_col]:
+        return np.zeros_like(surface_mask)
+
+    neighbor_offsets = ((-1, 0), (1, 0), (0, -1), (0, 1))
+    center_location = locations_map[center_row, center_col]
+    neighbor_dists = []
+    # TODO: may need to look at more than 4 neighbors for case where center pixel is on
+    # an edge.
+    for d_row, d_col in neighbor_offsets:
+        neighbor_row, neighbor_col = center_row + d_row, center_col + d_col
+        if not (0 <= neighbor_row < height and 0 <= neighbor_col < width):
+            continue
+        if not surface_mask[neighbor_row, neighbor_col]:
+            continue
+        dist_3d = np.linalg.norm(
+            locations_map[neighbor_row, neighbor_col] - center_location
+        )
+        if np.isfinite(dist_3d):
+            neighbor_dists.append(dist_3d)
+    max_3d_dist = float(np.median(neighbor_dists) * 2) if neighbor_dists else 0.0
+
+    in_cluster = np.zeros_like(surface_mask)
+    in_cluster[center_row, center_col] = True
+    to_visit = deque([(center_row, center_col)])
+    while to_visit:
+        row, col = to_visit.popleft()
+        current_location = locations_map[row, col]
+        for d_row, d_col in neighbor_offsets:
+            neighbor_row = row + d_row
+            neighbor_col = col + d_col
+            if not (0 <= neighbor_row < height and 0 <= neighbor_col < width):
+                continue
+            if in_cluster[neighbor_row, neighbor_col]:
+                continue
+            if not surface_mask[neighbor_row, neighbor_col]:
+                continue
+            neighbor_location = locations_map[neighbor_row, neighbor_col]
+            dist_3d = np.linalg.norm(neighbor_location - current_location)
+            if dist_3d <= max_3d_dist:
+                in_cluster[neighbor_row, neighbor_col] = True
+                to_visit.append((neighbor_row, neighbor_col))
+    return in_cluster
 
 
 class SalienceSM(SensorModule):
@@ -174,12 +228,13 @@ class SalienceSM(SensorModule):
 
         # Restore the weighted salience to image shape; boolean-mask indexing and
         # np.where enumerate pixels in the same row-major order.
-        salience_map = np.zeros(on_object.on_object_mask.shape)
-        salience_map[on_object.on_object_mask] = salience
+        # salience_map = np.zeros(on_object.on_object_mask.shape)
+        # salience_map[on_object.on_object_mask] = salience
 
         surface_mask = segmentation_map.astype(bool) & on_object.on_object_mask
+        surface_mask = _keep_center_cluster(surface_mask, on_object.locations_map)
         surface_locations = on_object.locations_map[surface_mask]
-        surface_salience = salience_map[surface_mask]
+        # surface_salience = salience_map[surface_mask]
 
         return segmentation_map, [
             AttentionWeight(
