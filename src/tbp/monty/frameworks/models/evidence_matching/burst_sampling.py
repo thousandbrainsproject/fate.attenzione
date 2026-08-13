@@ -263,7 +263,6 @@ class BurstSamplingHypothesesUpdater:
         started this step), the new window begins with True so that start is not
         dropped. Otherwise the list stays empty until a burst actually starts.
         """
-        logger.info(f"reset_burst_counter: {list(self._burst_started)}")
         burst_in_progress = (
             self.sampling_burst_steps > 0 or self.last_burst_kind == "start"
         )

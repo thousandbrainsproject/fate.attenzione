@@ -143,7 +143,7 @@ class AttentionSystem:
         attention_weights = [
             aw for region in regions for aw in region if aw.location is not None
         ]
-        if len(attention_weights) > 33000:
+        if len(attention_weights) >= 33401:
             logging.info(
                 f"large inhibition with {len(attention_weights)} weights, delete all voxels."
             )

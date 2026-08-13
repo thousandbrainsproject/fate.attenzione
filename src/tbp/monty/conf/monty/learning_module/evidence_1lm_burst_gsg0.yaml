@@ -16,6 +16,7 @@ learning_module_0:
       pose_vectors: ${np.ones:3}
       principal_curvatures_log: ${np.ones:2}
   x_percent_threshold: 10
+  object_evidence_threshold: 3
   max_graph_size: 0.4
   num_model_voxels_per_dim: 200
   gsg: null
