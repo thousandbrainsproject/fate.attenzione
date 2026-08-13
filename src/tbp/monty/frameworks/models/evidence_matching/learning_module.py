@@ -19,6 +19,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 
+from tbp.monty.attention.attention_system import INITIAL_WEIGHT
 from tbp.monty.cmp import AttentionWeight, Message
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
@@ -1174,7 +1175,7 @@ class EvidenceGraphLM(GraphLM):
         return [
             AttentionWeight(
                 location=loc,
-                weight=-np.inf,
+                weight=-INITIAL_WEIGHT * 100,
                 sender_id=self.learning_module_id,
                 sender_type="LM",
             )
