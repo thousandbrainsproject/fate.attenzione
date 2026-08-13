@@ -766,3 +766,107 @@ class FateAttenzioneInterface(Interface):
         #     position=np.array([2.0, 1.5, 0.0]),
         #     rotation=(1.0, 0.0, 0.0, 0.0),
         # )
+
+
+class BlinkingObjectInterface(Interface):
+    """Environment interface for BlinkingObject."""
+
+    _blink_frequency: int = 5
+    _blink_counter: int = 0
+    _blink_is_visible: bool = False
+
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.primary_target = {
+            "object": "no_label",
+            "rotation": (1.0, 0.0, 0.0, 0.0),
+            "euler_rotation": np.array([0, 0, 0]),
+            "quat_rotation": [1, 0, 0, 0],
+            "position": np.array([0, 0, 0]),
+            "scale": [1.0, 1.0, 1.0],
+        }
+
+    def pre_episode(self, rng: np.random.RandomState):  # noqa: ARG002
+        # not calling super, because not using rng
+        self.env.remove_all_objects()
+
+        # primary_target = self.env.add_object(
+        #     name="mug",
+        #     position=np.array([0, 1.5, 0.08]),
+        #     rotation=(1.0, 0.0, 0.0, 0.0),
+        # )
+        primary_target = self.env.add_object(
+            name="sphere",
+            position=np.array([0, 1.5, 0.08]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+            scale=(0.05, 0.05, 0.05),
+        )
+        self.primary_target = {
+            "object": primary_target.object_id,
+            "rotation": (1.0, 0.0, 0.0, 0.0),
+            "euler_rotation": np.array([0, 0, 0]),
+            "quat_rotation": [1, 0, 0, 0],
+            "position": np.array([0, 1.5, 0]),
+            "scale": [1.0, 1.0, 1.0],
+        }
+
+        self.env.add_object(
+            name="room",
+            position=np.array([0, 0.8, 0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+        )
+
+        self.env.add_object(
+            name="sphere",
+            position=np.array([0.2, 1.5, 0]),
+            rotation=(1.0, 0.0, 0.0, 0.0),
+            scale=(0.05, 0.05, 0.05),
+        )
+
+    def step(
+        self, actions: Sequence[Action]
+    ) -> tuple[Observations, ProprioceptiveState]:
+
+        self._blink_counter += 1
+        if self._blink_counter % self._blink_frequency == 0:
+            self._blink_is_visible = not self._blink_is_visible
+            if self._blink_is_visible:
+                self.env.add_object(
+                    name="sphere",
+                    position=np.array([0.2, 1.5, 0]),
+                    rotation=(1.0, 0.0, 0.0, 0.0),
+                    scale=(0.05, 0.05, 0.05),
+                )
+            else:
+                self.env.remove_all_objects()
+                # primary_target = self.env.add_object(
+                #     name="mug",
+                #     position=np.array([0, 1.5, 0.08]),
+                #     rotation=(1.0, 0.0, 0.0, 0.0),
+                # )
+                primary_target = self.env.add_object(
+                    name="sphere",
+                    position=np.array([0, 1.5, 0.08]),
+                    rotation=(1.0, 0.0, 0.0, 0.0),
+                    scale=(0.05, 0.05, 0.05),
+                )
+                self.primary_target = {
+                    "object": primary_target.object_id,
+                    "rotation": (1.0, 0.0, 0.0, 0.0),
+                    "euler_rotation": np.array([0, 0, 0]),
+                    "quat_rotation": [1, 0, 0, 0],
+                    "position": np.array([0, 1.5, 0]),
+                    "scale": [1.0, 1.0, 1.0],
+                }
+
+                self.env.add_object(
+                    name="room",
+                    position=np.array([0, 0.8, 0]),
+                    rotation=(1.0, 0.0, 0.0, 0.0),
+                )
+
+        return super().step(actions)

@@ -511,6 +511,7 @@ class MuJoCoSimulator(SimulatedObjectEnvironment):
             size=scale,
             pos=position,
             quat=rotation_quat,
+            rgba=(1.0, 0.0, 0.0, 1.0),
         )
 
     @property
