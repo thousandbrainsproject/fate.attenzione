@@ -86,36 +86,36 @@ class AttentionSystem:
         return self._voxel_grid
 
     def filter_percepts(self, percepts: list[Message | None]) -> list[Message | None]:
-        """Keep the percepts that live in the updated grid.
+        """Disable percepts that sit in inhibited (negative-weight) voxels.
+
+        A percept whose location falls in a voxel with negative weight has its
+        ``use_state`` set to False in place, so downstream modules skip it.
+        Percepts outside the grid or in non-negative voxels pass through
+        untouched. Which percepts were filtered is recorded in telemetry by
+        sender id, one entry per call.
 
         Args:
             percepts: The percepts collected from all modules this step.
 
         Returns:
-            The percepts inside an occupied voxel, plus any without a location.
-            All percepts, if the grid is empty.
+            The same list; filtered percepts are modified in place.
         """
-        if len(self._voxel_grid) == 0:
-            return list(percepts)
-
-        indices = []
-        locations = []
-        for i, p in enumerate(percepts):
-            if p is None:
-                continue
-            indices.append(i)
-            locations.append(p.location)
-
-        locations = np.stack(locations)
-        contained = self.contains_points(locations)
-        for i, c in enumerate(contained):
-            if not c:
-                p = percepts[indices[i]]
-                voxel = self._voxel_index(p.location)
-                if tuple(voxel) in self._voxel_grid.index:
-                    weight = self._voxel_grid.loc[voxel, "weight"].to_numpy()
-                    if weight < 0:
-                        percepts[indices[i]].use_state = False
+        filtered: list[str] = []
+        indices = [i for i, p in enumerate(percepts) if p is not None]
+        if len(self._voxel_grid) and indices:
+            locations = np.stack([percepts[i].location for i in indices])
+            weights = (
+                self._voxel_grid["weight"]
+                .reindex(self._voxel_index(locations), fill_value=0.0)
+                .to_numpy()
+            )
+            for i, weight in zip(indices, weights):
+                if weight < 0:
+                    p = percepts[i]
+                    logger.info(f"Filtering out percept from {p.sender_id}")
+                    p.use_state = False
+                    filtered.append(p.sender_id)
+        self._telemetry.percept_filtering(filtered)
         return percepts
 
     def filter_goals(self, goals: list[Goal]) -> list[Goal]:
@@ -158,6 +158,17 @@ class AttentionSystem:
         return filtered
 
     def update_regions(self, regions: list[list[AttentionWeight]]) -> None:
+        # Record who proposed inhibition before the weights are voxelized away.
+        self._telemetry.region_inhibition(
+            sorted(
+                {
+                    aw.sender_id
+                    for region in regions
+                    for aw in region
+                    if aw.location is not None and aw.weight < 0
+                }
+            )
+        )
         proposed = self._voxelize_regions(regions)
         decayed = self._decay(self._voxel_grid)
         merged = self._merge(decayed, proposed)
