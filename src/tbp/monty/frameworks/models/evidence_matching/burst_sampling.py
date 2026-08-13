@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -246,9 +247,17 @@ class BurstSamplingHypothesesUpdater:
 
     def reset(self) -> None:
         self.sampling_burst_steps = 0
+        self._burst_started: deque[bool] = deque()
 
         # Dictionary of slope trackers, one for each graph_id
         self.evidence_slope_trackers: dict[str, EvidenceSlopeTracker] = {}
+
+    def n_bursts_started(self, n_steps: int) -> int:
+        return int(sum(list(self._burst_started)[-n_steps:]))
+
+    def reset_burst_counter(self):
+        """Reset the burst counter."""
+        self._burst_started.clear()
 
     def __enter__(self) -> Self:
         """Enter context manager, runs before updating the hypotheses.
@@ -261,11 +270,13 @@ class BurstSamplingHypothesesUpdater:
         """
         self.max_slope = self._max_global_slope()
 
-        if (
+        burst_started = (
             self.max_slope <= self.burst_trigger_slope
             and self.sampling_burst_steps == 0
-        ):
+        )
+        if burst_started:
             self.sampling_burst_steps = self.sampling_burst_duration
+        self._burst_started.append(burst_started)
 
         return self
 

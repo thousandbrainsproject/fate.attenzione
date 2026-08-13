@@ -1080,6 +1080,16 @@ class EvidenceGraphLM(GraphLM):
         """
         return self.symmetry_evidence >= self.required_symmetry_evidence
 
+    def n_bursts_started(self, n_steps: int = 10) -> int:
+        if not hasattr(self.hypotheses_updater, "n_bursts_started"):
+            return 0
+        return self.hypotheses_updater.n_bursts_started(n_steps)
+
+    def reset_burst_counter(self):
+        if not hasattr(self.hypotheses_updater, "reset_burst_counter"):
+            return
+        self.hypotheses_updater.reset_burst_counter()
+
     def update_terminal_condition(self):
         """Check if we have reached a terminal condition for this episode.
 
@@ -1094,7 +1104,11 @@ class EvidenceGraphLM(GraphLM):
 
         self._attention_region = []
         # no possible matches
-        if len(possible_matches) == 0:
+        if len(possible_matches) == 0 or self.n_bursts_started(n_steps=20) == 3:
+            logger.info(f"burst {self.n_bursts_started(20)} times in a row.")
+            # set inhibitory region around the current location
+            self._attention_region = self._inhibit_unknown_object_region()
+            self.reset_burst_counter()
             # self.set_individual_ts("no_match")
             if (
                 self.buffer.get_num_observations_on_object() > 0
@@ -1120,6 +1134,8 @@ class EvidenceGraphLM(GraphLM):
                 logger.info(f"{self.learning_module_id} recognized object {object_id}")
                 # Inhibit object region to move on
                 self._attention_region = self._inhibit_object_region(object_id)
+                # also reset burst counter here since we expect to burst now.
+                self.reset_burst_counter()
         # > 1 possible match
         else:
             # if self.terminal_state == "match":
@@ -1179,6 +1195,34 @@ class EvidenceGraphLM(GraphLM):
                 sender_type="LM",
             )
             for loc in translated
+        ]
+
+    def _inhibit_unknown_object_region(self) -> list[AttentionWeight]:
+        """Inhibit the unknown object region to move on.
+
+        Returns:
+            The inhibited unknown object region.
+        """
+        current_loc = self.buffer.get_current_location(input_channel="first")
+        sample_radius = 0.2
+        # Fill the ball, not its surface: occupied voxels sit near the sensor,
+        # so a spherical shell around current_loc misses them. Spacing must be
+        # <= the attention voxel size (0.01 m) so every voxel in the ball is hit.
+        sample_step = 0.01
+        n = int(np.round(sample_radius / sample_step))
+        axis = np.arange(-n, n + 1) * sample_step
+        xx, yy, zz = np.meshgrid(axis, axis, axis, indexing="ij")
+        points = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1)
+        points = points[np.linalg.norm(points, axis=1) <= sample_radius]
+        points = current_loc + points
+        return [
+            AttentionWeight(
+                location=point,
+                weight=-np.inf,
+                sender_id=self.learning_module_id,
+                sender_type="LM",
+            )
+            for point in points
         ]
 
     def _object_pose_to_features(self, pose):
