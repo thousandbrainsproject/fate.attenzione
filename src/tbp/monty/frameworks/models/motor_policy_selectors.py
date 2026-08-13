@@ -232,3 +232,88 @@ class DistantPolicySelector(MotorPolicySelector):
     ) -> None:
         self._selected_policies.append(policy)
         self._selected_goals.append(goal)
+
+
+class DistantPolicySelectorNoJumpToGoal(MotorPolicySelector):
+    """DistantPolicySelector that looks at LM goals instead of jumping to them.
+
+    LM (GSG) goals keep their priority over SM goals, but both are executed
+    by the LookAtGoal policy: the agent orients toward the target rather than
+    teleporting. LookAtGoal completes in a single step, so none of
+    DistantPolicySelector's multi-step jump state (``_is_jumping``, undo
+    handling) applies here.
+    """
+
+    def __init__(
+        self,
+        look_at_goal: LookAtGoal,
+        default: MotorPolicy,
+    ):
+        # policies
+        self._look_at_goal = look_at_goal
+        self._default = default
+
+        # telemetry
+        self._selected_policies: list[MotorPolicy] = []
+        self._selected_goals: list[Goal | None] = []
+
+    def fixme_provide_motor_system(self, motor_system: ExperimentMotorSystem) -> None:
+        self._look_at_goal.fixme_provide_motor_system(motor_system)
+        self._default.fixme_provide_motor_system(motor_system)
+
+    def reset(self) -> None:
+        self._look_at_goal.reset()
+        self._default.reset()
+
+        self._selected_policies = []
+        self._selected_goals = []
+
+    def state_dict(self) -> Memento:
+        return {
+            "look_at_goal": self._look_at_goal.state_dict(),
+            "default": self._default.state_dict(),
+        }
+
+    def __call__(
+        self,
+        ctx: RuntimeContext,
+        observations: Observations,
+        state: MotorSystemState,
+        percept: Message,
+        goals: Sequence[Goal],
+    ) -> MotorPolicyResult:
+        # LM (GSG) goals take priority over SM goals; both are executed by
+        # looking at the target.
+        gsg_goals = [g for g in goals if g.sender_type == "GSG"]
+        sm_goals = [g for g in goals if g.sender_type == "SM"]
+        preferred = gsg_goals or sm_goals
+        if preferred:
+            goal = highest_confidence_goal(preferred)
+            result = self._look_at_goal(
+                ctx,
+                observations,
+                state,
+                percept,
+                goal,
+            )
+            self._update_telemetry(policy=self._look_at_goal, goal=goal)
+            return result
+
+        # Fall back to the default policy.
+        result = self._default(
+            ctx,
+            observations,
+            state,
+            percept,
+            None,
+        )
+        self._update_telemetry(policy=self._default, goal=None)
+        return result
+
+    def _update_telemetry(
+        self,
+        policy: MotorPolicy,
+        goal: Goal | None,
+    ) -> None:
+        self._selected_policies.append(policy)
+        self._selected_goals.append(goal)
