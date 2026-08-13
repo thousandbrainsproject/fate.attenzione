@@ -10,6 +10,7 @@ experiment:
         min_train_steps: 3
         max_total_steps: 2500
         copy_lm_0_to_all_lms: true
+        attention_system: true
       motor_system_config:
         _target_: tbp.monty.frameworks.models.motor_system.MotorSystem
         policy_selector:
@@ -230,7 +231,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_1:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_1
@@ -255,7 +256,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_2:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_2
@@ -280,7 +281,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_3:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_3
@@ -305,7 +306,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_4:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_4
@@ -330,7 +331,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_5:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_5
@@ -355,7 +356,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_6:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_6
@@ -380,7 +381,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_7:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_7
@@ -405,7 +406,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_8:
           _target_: tbp.monty.frameworks.models.sensor_modules.CameraSM
           sensor_module_id: patch_8
@@ -430,7 +431,7 @@ experiment:
             - 2
             - 2
             distance: 0.01
-          save_raw_obs: false
+          save_raw_obs: true
         sensor_module_9:
           _target_: tbp.monty.frameworks.models.salience.sensor_module.SalienceSM
           sensor_module_id: view_finder
@@ -722,8 +723,8 @@ experiment:
       detailed_save_per_episode: true
     show_sensor_output: true
     max_train_steps: 1000
-    max_eval_steps: 10
-    max_total_steps: 10
+    max_eval_steps: 100
+    max_total_steps: 100
     n_train_epochs: 3
     n_eval_epochs: 1
     model_name_or_path: ${constants.pretrained_dir}/surf_agent_1lm_10distinctobj/pretrained/
