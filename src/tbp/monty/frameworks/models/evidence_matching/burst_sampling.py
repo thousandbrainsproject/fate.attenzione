@@ -257,8 +257,19 @@ class BurstSamplingHypothesesUpdater:
         return int(sum(list(self._burst_started)[-n_steps:]))
 
     def reset_burst_counter(self):
-        """Reset the burst counter."""
+        """Reset the burst counter.
+
+        Clears the start history. If a burst is currently in progress (or just
+        started this step), the new window begins with True so that start is not
+        dropped. Otherwise the list stays empty until a burst actually starts.
+        """
+        logger.info(f"reset_burst_counter: {list(self._burst_started)}")
+        burst_in_progress = (
+            self.sampling_burst_steps > 0 or self.last_burst_kind == "start"
+        )
         self._burst_started.clear()
+        if burst_in_progress:
+            self._burst_started.append(True)
 
     def __enter__(self) -> Self:
         """Enter context manager, runs before updating the hypotheses.
