@@ -591,11 +591,12 @@ class DepthTo3DLocations(Transform):
                 # self.use_semantic_sensor implies multi-object experiments.
                 surface_patch = agent_obs["semantic"]
             else:
-                surface_patch = self.get_surface_from_depth(
-                    depth_patch,
-                    semantic_patch,
-                    default_on_surface_th,
-                )
+                surface_patch = np.ones_like(depth_patch, dtype=bool)
+                # surface_patch = self.get_surface_from_depth(
+                #     depth_patch,
+                #     semantic_patch,
+                #     default_on_surface_th,
+                # )
 
             # Approximate true world coordinates
             x, y = np.meshgrid(

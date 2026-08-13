@@ -31,6 +31,69 @@ from visualize_3d import DEFAULT_EXP_DIR, SMTelemetry, _bounds
 PRE_COLOR = "red"
 POST_COLOR = "black"
 
+# Points this close (meters) to the goal cloud's extreme planes are treated as
+# enclosure surfaces (room walls/floor/ceiling) and excluded from axis bounds.
+ENCLOSURE_MARGIN = 0.03
+
+
+def interior_points(
+    point_sets: list[np.ndarray], margin: float = ENCLOSURE_MARGIN
+) -> list[np.ndarray]:
+    """Drop points on the enclosing room's surfaces, keeping the objects.
+
+    With a room in the scene every pixel is on-object, so the goal cloud spans
+    the whole room and axis bounds computed from it dwarf the objects. The
+    room's visible surfaces are exactly the cloud's extreme planes on each
+    axis, so points within ``margin`` of those planes are treated as enclosure
+    and excluded.
+
+    Args:
+        point_sets: Point arrays to filter.
+        margin: Shell thickness to exclude at the cloud's extremes.
+
+    Returns:
+        A list with one filtered array; the original sets if filtering would
+        leave too few points to bound (e.g. a wall-only view or no room).
+    """
+    populated = [p for p in point_sets if p is not None and len(p)]
+    if not populated:
+        return point_sets
+
+    points = np.vstack(populated)
+    low = points.min(axis=0) + margin
+    high = points.max(axis=0) - margin
+    interior = points[((points > low) & (points < high)).all(axis=1)]
+    if len(interior) < 100:
+        return point_sets
+    return [interior]
+
+
+def clip_to_limits(
+    points: np.ndarray,
+    xlim: list[float],
+    ylim: list[float],
+    zlim: list[float],
+) -> np.ndarray:
+    """Keep only the points inside the axis limits.
+
+    Matplotlib's 3D axes do not clip scatter points to the axes box, so
+    without this, room-surface points bleed past object-scale limits.
+
+    Args:
+        points: A ``(N, 3)`` array.
+        xlim: X-axis limits.
+        ylim: Y-axis limits.
+        zlim: Z-axis limits.
+
+    Returns:
+        The subset of points within the limits.
+    """
+    if not len(points):
+        return points
+    low = np.array([xlim[0], ylim[0], zlim[0]])
+    high = np.array([xlim[1], ylim[1], zlim[1]])
+    return points[((points >= low) & (points <= high)).all(axis=1)]
+
 
 class GoalFilteringTelemetry:
     """Plot-ready views over the attention system's recorded goal filtering.
@@ -124,7 +187,7 @@ def create_goal_filtering_animation(
         )
 
     n_frames = sm.n_frames
-    xlim, ylim, zlim = _bounds(filtering.bounds_points())
+    xlim, ylim, zlim = _bounds(interior_points(filtering.bounds_points()))
 
     fig = plt.figure(figsize=(13, 5.5))
     grid = fig.add_gridspec(1, 2, wspace=0.25)
@@ -179,6 +242,9 @@ def create_goal_filtering_animation(
         ax_goals.clear()
         style_3d(ax_goals)
         pre, post = filtering.at(step)
+        # Crop to the object-scale axis limits: 3D axes don't clip scatters.
+        pre = clip_to_limits(pre, xlim, ylim, zlim)
+        post = clip_to_limits(post, xlim, ylim, zlim)
         # Pre first so the surviving goals draw on top of the red field.
         if len(pre):
             ax_goals.scatter(
