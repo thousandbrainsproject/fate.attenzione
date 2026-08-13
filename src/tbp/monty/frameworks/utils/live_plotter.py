@@ -13,6 +13,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import gridspec
+from matplotlib.lines import Line2D
 
 from tbp.monty.frameworks.agents import AgentID
 from tbp.monty.frameworks.models.abstract_monty_classes import Monty, Observations
@@ -35,6 +36,21 @@ _VOXEL_CENTRE_OFFSET = 0.5
 _FILTERED_ALPHA = 0.45
 _FILTERED_GREY_BLEND = 0.65
 
+# Okabe-Ito palette: distinguishable under the common colour-vision deficiencies.
+# Matches analysis/visualize_3d.py; yellow and black last (faint / cursor colour).
+_OKABE_ITO = (
+    "#E69F00",  # orange
+    "#56B4E9",  # sky blue
+    "#009E73",  # bluish green
+    "#0072B2",  # blue
+    "#D55E00",  # vermillion
+    "#CC79A7",  # reddish purple
+    "#F0E442",  # yellow
+    "#000000",  # black
+)
+_BURST_START_COLOR = "#D55E00"  # vermillion
+_BURST_CONTINUE_COLOR = "#56B4E9"  # sky blue
+
 
 class LivePlotter:
     """Class for plotting sensor observations during an experiment.
@@ -56,12 +72,14 @@ class LivePlotter:
     def __init__(self):
         self._nine_patch_mode = False
         self.save_dir: Path | None = None
-        # Inhibit points held on the LM after terminal checks are only applied by
-        # the attention system on the *next* Monty step. Buffer them so the plot
-        # shows inhibit on the step it actually affected the grid.
-        self._inhibit_applied_locations: np.ndarray = np.empty((0, 3))
         # Growing axis limits so the attention panel does not jump/zoom each step.
         self._attention_bounds: tuple[np.ndarray, np.ndarray] | None = None
+        self._evidence_traces: dict[str, list[float]] = {}
+        self._n_hypotheses: list[int] = []
+        self._evidence_lines: dict[str, object] = {}
+        self._burst_lines: list[object] = []
+        self._evidence_legend = None
+        self._evidence_cursor = None
 
     def initialize_online_plotting(
         self,
@@ -83,7 +101,7 @@ class LivePlotter:
         # Build mixed 2D/3D axes explicitly. plt.subplots() leaves an orphaned 2D
         # axis behind if we later replace a slot with projection="3d".
         # Layout: camera | sensor/patches | MLH | attention side
-        #                                    (empty below) | attention top
+        #         evidence traces         |      | attention top
         if self._nine_patch_mode:
             self.fig = plt.figure(figsize=(14, 8))
             self.fig.subplots_adjust(top=0.9, wspace=0.2, hspace=0.25)
@@ -107,6 +125,7 @@ class LivePlotter:
             attn_top_ax = self.fig.add_subplot(gs[1, 3], projection="3d")
             # Keep self.ax[0]/[2] as camera / MLH; middle slot unused in 9-patch mode.
             self.ax = [camera_ax, None, mlh_ax, attn_side_ax, attn_top_ax]
+            self.ax_evidence = self.fig.add_subplot(gs[1, 0:2])
         else:
             self.fig = plt.figure(figsize=(12, 9))
             self.fig.subplots_adjust(top=1.05, hspace=0.3, wspace=0.2)
@@ -119,16 +138,17 @@ class LivePlotter:
                 self.fig.add_subplot(gs[1, 3], projection="3d"),
             ]
             self.patch_axes = []
+            self.ax_evidence = self.fig.add_subplot(gs[1, 0:2])
 
         self.setup_camera_ax()
         self.setup_sensor_ax()
         self.setup_mlh_ax()
         self.setup_attention_ax()
+        self.setup_evidence_ax()
 
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir is not None:
             self.save_dir.mkdir(parents=True, exist_ok=True)
-        self._inhibit_applied_locations = np.empty((0, 3))
         self._attention_bounds = None
 
     @staticmethod
@@ -280,9 +300,7 @@ class LivePlotter:
             np.stack([loc for _, loc in candidates])
         )
         return frozenset(
-            sender_id
-            for (sender_id, _), keep in zip(candidates, contained)
-            if not keep
+            sender_id for (sender_id, _), keep in zip(candidates, contained) if not keep
         )
 
     def show_observations(
@@ -315,20 +333,20 @@ class LivePlotter:
             self.show_patch(first_sensor_depth, filtered_patch_ids)
         if mlh_model:
             self.show_mlh(mlh, mlh_model)
-        # propose_region after this step is what will be applied next step. What
-        # attention already applied this step is the buffered previous proposal.
-        pending_inhibit = self._inhibited_locations(learning_modules)
-        applied_inhibit = self._inhibit_applied_locations
-        self._inhibit_applied_locations = pending_inhibit
+        # Current LM propose_region (set by this step's terminal condition).
+        # Attention applies it on the next matching step, so grid holes can lag
+        # the coral overlay by one frame.
+        inhibit_locations = self._inhibited_locations(learning_modules)
         status = self._recognition_status(
-            first_learning_module, inhibit_applied=len(applied_inhibit) > 0
+            first_learning_module, inhibit=len(inhibit_locations) > 0
         )
         self.fig.suptitle(f"Observation at step {step}")
         self.show_attention(
             attention_system,
             status=status,
-            inhibited_locations=applied_inhibit,
+            inhibited_locations=inhibit_locations,
         )
+        self.show_evidence(first_learning_module)
         plt.pause(0.00001)
         self._save_frame(step)
 
@@ -367,14 +385,14 @@ class LivePlotter:
         return np.asarray(locations, dtype=float)
 
     def _recognition_status(
-        self, first_learning_module, inhibit_applied: bool = False
+        self, first_learning_module, inhibit: bool = False
     ) -> str:
-        """Summarize terminal state and applied object-region inhibition.
+        """Summarize terminal state and current object-region inhibition.
 
         Args:
             first_learning_module: The LM used for terminal-state text.
-            inhibit_applied: Whether inhibit points were applied to attention
-                this step (lagged one step from ``propose_region``).
+            inhibit: Whether the LM currently holds inhibit points on
+                ``propose_region``.
 
         Returns:
             A short status string, or empty when neither applies.
@@ -383,8 +401,8 @@ class LivePlotter:
         terminal = getattr(first_learning_module, "terminal_state", None)
         if terminal is not None:
             parts.append(f"terminal={terminal}")
-        if inhibit_applied:
-            parts.append("inhibit applied")
+        if inhibit:
+            parts.append("inhibit")
         return " | ".join(parts)
 
     def show_view_finder(
@@ -442,9 +460,7 @@ class LivePlotter:
                 )
 
     @staticmethod
-    def _overlay_segmentation(
-        rgba: np.ndarray, mask: np.ndarray | None
-    ) -> np.ndarray:
+    def _overlay_segmentation(rgba: np.ndarray, mask: np.ndarray | None) -> np.ndarray:
         """Tint active segmentation pixels green on a view-finder frame.
 
         Matches the blend used by ``analysis/visualize_3d.SMTelemetry.overlay``.
@@ -499,9 +515,7 @@ class LivePlotter:
         """
         if self.depth_image:
             self.depth_image.remove()
-        filtered = bool(
-            filtered_patch_ids & {SensorID("patch"), SensorID("patch_0")}
-        )
+        filtered = bool(filtered_patch_ids & {SensorID("patch"), SensorID("patch_0")})
         display, imshow_kwargs = self._filtered_depth_display(
             first_sensor_depth, filtered
         )
@@ -610,14 +624,15 @@ class LivePlotter:
         """Plot the attention system's current voxel filter.
 
         Shows voxels held in ``attention_system.grid`` after the latest
-        ``attention_system.step``, plus inhibit points applied this step
-        (lagged one step from LM ``propose_region``). Draws a side view in
-        the rightmost top panel and a top view in the panel below it.
+        ``attention_system.step``, plus the LM's current inhibit points from
+        ``propose_region``. Draws a side view in the rightmost top panel and a
+        top view in the panel below it.
 
         Args:
             attention_system: The model's attention system, or None.
             status: Recognition / inhibit status string for the title.
-            inhibited_locations: ``(N, 3)`` inhibit points applied this step.
+            inhibited_locations: ``(N, 3)`` inhibit points from this step's
+                terminal condition.
         """
         if inhibited_locations is None:
             inhibited_locations = np.empty((0, 3))
@@ -816,3 +831,168 @@ class LivePlotter:
         self.ax[4].set_title("Attention top")
         self.ax[4].view_init(elev=0, azim=-90)
         self._hide_3d_axes(self.ax[4])
+
+    def setup_evidence_ax(self):
+        """Initialize the max-evidence / burst panel (bottom left)."""
+        ax = self.ax_evidence
+        ax.set_title("Max Evidence")
+        ax.set_xlabel("LM step")
+        ax.set_ylabel("Max evidence")
+        ax.set_xlim(0, 1)
+        self._evidence_traces = {}
+        self._n_hypotheses = []
+        self._evidence_lines = {}
+        self._burst_lines = []
+        self._evidence_legend = None
+        self._evidence_cursor = ax.axvline(
+            0, color="black", linewidth=0.8, alpha=0.6, visible=False
+        )
+
+    def show_evidence(self, first_learning_module) -> None:
+        """Update max-evidence traces and burst markers for the latest LM step.
+
+        Matches the bottom-left panel of ``analysis/visualize_3d.py``: one line
+        per object (strongest coloured, the rest grey), and a cursor at the
+        current LM step. Burst starts are vermillion vlines; consecutive burst
+        steps are sky-blue dashed vlines. Only LM-processed steps append a
+        point; motor-only / unprocessed steps leave the traces unchanged.
+
+        Args:
+            first_learning_module: The LM whose evidence traces to plot.
+        """
+        ax = self.ax_evidence
+        if not hasattr(first_learning_module, "evidence_for_each_graph"):
+            ax.set_title("Max Evidence (unavailable)")
+            return
+
+        processed = True
+        buffer = getattr(first_learning_module, "buffer", None)
+        if buffer is not None and hasattr(buffer, "get_last_obs_processed"):
+            processed = bool(buffer.get_last_obs_processed())
+
+        if processed:
+            self._append_evidence_step(first_learning_module)
+
+        lm_step = len(self._n_hypotheses) - 1
+        lm_id = getattr(first_learning_module, "learning_module_id", "LM")
+        if lm_step < 0:
+            ax.set_title(f"{lm_id} Max Evidence (no LM steps yet)")
+            return
+
+        xs = np.arange(lm_step + 1)
+        by_peak = sorted(
+            self._evidence_traces,
+            key=lambda name: (
+                max(self._evidence_traces[name]) if self._evidence_traces[name] else 0.0
+            ),
+            reverse=True,
+        )
+        labelled = set(by_peak[: len(_OKABE_ITO)])
+        for rank, name in enumerate(by_peak):
+            line = self._evidence_lines[name]
+            line.set_data(xs, self._evidence_traces[name])
+            if name in labelled:
+                line.set_color(_OKABE_ITO[rank])
+                line.set_linewidth(1.5)
+                line.set_zorder(2)
+                line.set_label(name)
+            else:
+                line.set_color("0.8")
+                line.set_linewidth(0.8)
+                line.set_zorder(1)
+                line.set_label("_nolegend_")
+
+        handles = [self._evidence_lines[name] for name in by_peak if name in labelled]
+        handles.extend(
+            [
+                Line2D(
+                    [0],
+                    [0],
+                    color=_BURST_START_COLOR,
+                    linestyle="-",
+                    linewidth=1.4,
+                    label="burst start",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    color=_BURST_CONTINUE_COLOR,
+                    linestyle="--",
+                    alpha=0.6,
+                    label="burst",
+                ),
+            ]
+        )
+        if self._evidence_legend is not None:
+            self._evidence_legend.remove()
+            self._evidence_legend = None
+        self._evidence_legend = ax.legend(handles=handles, fontsize=7, loc="upper left")
+
+        self._evidence_cursor.set_xdata([lm_step, lm_step])
+        self._evidence_cursor.set_visible(True)
+
+        all_vals = [v for trace in self._evidence_traces.values() for v in trace]
+        if all_vals:
+            low, high = float(min(all_vals)), float(max(all_vals))
+            pad = 0.05 * (high - low or 1.0)
+            ax.set_ylim(low - pad, high + pad)
+        ax.set_xlim(0, max(lm_step, 1))
+        ax.set_title(f"{lm_id} Max Evidence (LM step {lm_step})")
+
+    def _append_evidence_step(self, first_learning_module) -> None:
+        """Record max evidence and hypothesis count for one processed LM step.
+
+        Args:
+            first_learning_module: The LM that just processed.
+        """
+        graph_ids, evidences = first_learning_module.evidence_for_each_graph()
+        current: dict[str, float] = {}
+        if list(graph_ids) != ["patch_off_object"]:
+            current = {name: float(value) for name, value in zip(graph_ids, evidences)}
+
+        n_hyp = self._count_hypotheses(first_learning_module)
+        self._n_hypotheses.append(n_hyp)
+        lm_step = len(self._n_hypotheses) - 1
+
+        for name in current:
+            if name not in self._evidence_traces:
+                self._evidence_traces[name] = [0.0] * lm_step
+                (line,) = self.ax_evidence.plot([], [], linewidth=1.5)
+                self._evidence_lines[name] = line
+        for name, trace in self._evidence_traces.items():
+            trace.append(float(current.get(name, 0.0)))
+
+        updater = getattr(first_learning_module, "hypotheses_updater", None)
+        kind = getattr(updater, "last_burst_kind", "none") if updater else "none"
+        if kind == "start":
+            vline = self.ax_evidence.axvline(
+                lm_step,
+                color=_BURST_START_COLOR,
+                linestyle="-",
+                linewidth=1.4,
+                alpha=0.85,
+            )
+            self._burst_lines.append(vline)
+        elif kind == "continue":
+            vline = self.ax_evidence.axvline(
+                lm_step,
+                color=_BURST_CONTINUE_COLOR,
+                linestyle="--",
+                alpha=0.6,
+            )
+            self._burst_lines.append(vline)
+
+    @staticmethod
+    def _count_hypotheses(learning_module) -> int:
+        """Return the current number of pose hypotheses across all objects.
+
+        Args:
+            learning_module: Learning module whose ``_hypotheses`` to count.
+
+        Returns:
+            Total hypothesis count, or 0 when the LM has no hypothesis space.
+        """
+        hypotheses = getattr(learning_module, "_hypotheses", None)
+        if not hypotheses:
+            return 0
+        return int(sum(len(hyp.evidence) for hyp in hypotheses.values()))

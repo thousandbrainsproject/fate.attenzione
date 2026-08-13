@@ -248,6 +248,7 @@ class BurstSamplingHypothesesUpdater:
     def reset(self) -> None:
         self.sampling_burst_steps = 0
         self._burst_started: deque[bool] = deque()
+        self.last_burst_kind = "none"
 
         # Dictionary of slope trackers, one for each graph_id
         self.evidence_slope_trackers: dict[str, EvidenceSlopeTracker] = {}
@@ -276,6 +277,11 @@ class BurstSamplingHypothesesUpdater:
         )
         if burst_started:
             self.sampling_burst_steps = self.sampling_burst_duration
+            self.last_burst_kind = "start"
+        elif self.sampling_burst_steps > 0:
+            self.last_burst_kind = "continue"
+        else:
+            self.last_burst_kind = "none"
         self._burst_started.append(burst_started)
 
         return self
