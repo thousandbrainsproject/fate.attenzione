@@ -1175,7 +1175,7 @@ class EvidenceGraphLM(GraphLM):
         return [
             AttentionWeight(
                 location=loc,
-                weight=-INITIAL_WEIGHT * 100,
+                weight=-INITIAL_WEIGHT,
                 sender_id=self.learning_module_id,
                 sender_type="LM",
             )

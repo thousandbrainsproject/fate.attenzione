@@ -114,9 +114,8 @@ class AttentionSystem:
                 voxel = self._voxel_index(p.location)
                 if tuple(voxel) in self._voxel_grid.index:
                     weight = self._voxel_grid.loc[voxel, "weight"].to_numpy()
-                    p.confidence = float(
-                        weighted(p.confidence, weight, self._voxel_lifetime / 3)
-                    )
+                    if weight < 0:
+                        percepts[indices[i]].use_state = False
         return percepts
 
     def filter_goals(self, goals: list[Goal]) -> list[Goal]:
@@ -132,6 +131,9 @@ class AttentionSystem:
         self._telemetry.voxel_grid(self._voxel_grid)
 
         if len(self._voxel_grid) == 0:
+            return list(goals)
+
+        if np.all(self._voxel_grid["weight"].to_numpy() < 0):
             return list(goals)
 
         located = [g for g in goals if g.location is not None]
