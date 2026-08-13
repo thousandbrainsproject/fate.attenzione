@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from tbp.monty.cmp import Goal
 from tbp.monty.frameworks.models.sensor_modules import SnapshotTelemetry
@@ -27,22 +28,28 @@ class SalienceSMTelemetry(SnapshotTelemetry):
     special handling.
     """
 
-    def __init__(self, save_segmentation: bool = False) -> None:
+    def __init__(
+        self, save_segmentation: bool = False, save_salience3d_diff: bool = False
+    ) -> None:
         """Initialize the telemetry.
 
         Args:
             save_segmentation: Whether to record segmentation masks and regions.
+            save_salience3d_diff: Whether to record the difference in salience3d.
         """
         super().__init__()
         self._save_segmentation = save_segmentation
+        self._save_salience3d_diff = save_salience3d_diff
         self.segmentation_maps: list[np.ndarray | None] = []
         self.regions: list[list[Goal]] = []
+        self.salience3d_diffs: list[pd.Series] = []
 
     def reset(self) -> None:
         """Reset the telemetry."""
         super().reset()
         self.segmentation_maps = []
         self.regions = []
+        self.salience3d_diffs = []
 
     def record(
         self,
@@ -63,6 +70,11 @@ class SalienceSMTelemetry(SnapshotTelemetry):
         self.segmentation_maps.append(segmentation_map)
         self.regions.append(list(region))
 
+    def salience3d_diff(self, diff: pd.Series) -> None:
+        if not self._save_salience3d_diff:
+            return
+        self.salience3d_diffs.append(diff)
+
     def state_dict(self) -> Memento:
         """Return all recorded telemetry.
 
@@ -75,4 +87,11 @@ class SalienceSMTelemetry(SnapshotTelemetry):
             **super().state_dict(),
             segmentation_maps=self.segmentation_maps,
             regions=self.regions,
+            salience3d_diffs=[
+                dict(
+                    voxels=diff.index.to_frame(index=False).to_numpy(dtype=int),
+                    diff=diff.to_numpy(),
+                )
+                for diff in self.salience3d_diffs
+            ],
         )

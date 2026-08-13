@@ -136,7 +136,11 @@ class SalienceSM(SensorModule):
         return self._sensor_module_id
 
     def state_dict(self) -> Memento:
-        return self._snapshot_telemetry.state_dict()
+        return dict(
+            salience3d_voxel_size=self._voxel_size,
+            salience3d_diff_threshold=self._salience3d_diff_threshold,
+            **self._snapshot_telemetry.state_dict(),
+        )
 
     def update_state(self, agent: AgentState) -> None:
         """Update information about the sensor's location and rotation."""
@@ -208,6 +212,7 @@ class SalienceSM(SensorModule):
                     observation, self.state.rotation, self.state.position
                 )
             self._snapshot_telemetry.record(segmentation_map, self._region)
+            self._snapshot_telemetry.salience3d_diff(self._salience3d_diff)
 
     def _step_salience3d(self, on_object: OnObjectObservation) -> pd.Series:
         current = salience3d(on_object.locations, on_object.salience, self._voxel_size)
