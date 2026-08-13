@@ -140,10 +140,20 @@ class AttentionSystem:
         return filtered
 
     def update_regions(self, regions: list[list[AttentionWeight]]) -> None:
-        proposed = self._voxelize_regions(regions)
-        decayed = self._decay(self._voxel_grid)
-        merged = self._merge(decayed, proposed)
-        self._voxel_grid = self._expire(merged)
+        attention_weights = [
+            aw for region in regions for aw in region if aw.location is not None
+        ]
+        if len(attention_weights) > 33000:
+            logging.info(
+                f"large inhibition with {len(attention_weights)} weights, delete all voxels."
+            )
+            self._voxel_grid = empty_voxel_grid()
+        else:
+            logging.info(f"Updating regions with {len(attention_weights)} regions")
+            proposed = self._voxelize_regions(attention_weights)
+            decayed = self._decay(self._voxel_grid)
+            merged = self._merge(decayed, proposed)
+            self._voxel_grid = self._expire(merged)
 
     def contains_points(
         self,
@@ -179,7 +189,7 @@ class AttentionSystem:
             **self._telemetry.state_dict(),
         )
 
-    def _voxelize_regions(self, regions: list[list[AttentionWeight]]) -> pd.DataFrame:
+    def _voxelize_regions(self, attention_weights: list) -> pd.DataFrame:
         """Voxelize this step's regions into a fresh grid.
 
         Args:
@@ -189,9 +199,6 @@ class AttentionSystem:
             The grid built from this step's regions alone.
 
         """
-        attention_weights = [
-            aw for region in regions for aw in region if aw.location is not None
-        ]
         covoxel_points = voxelize_and_bin_points(
             np.asarray([aw.location for aw in attention_weights]), self._voxel_size
         )
