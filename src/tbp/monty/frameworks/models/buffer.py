@@ -739,6 +739,31 @@ class BufferEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+def buffer_encoder_default(obj: Any) -> Any:
+    """orjson-compatible ``default`` hook backed by BufferEncoder's registry.
+
+    orjson does not support encoder classes, only a ``default`` callable for
+    types it cannot serialize natively; this adapter exposes the same
+    type-hierarchy-aware registry that BufferEncoder uses, so both encoders
+    stay in lockstep.
+
+    Args:
+        obj: The object orjson could not serialize natively.
+
+    Returns:
+        A JSON-serializable representation of the object.
+
+    Raises:
+        TypeError: If no encoder is registered for the object's type.
+    """
+    encoder = BufferEncoder._find(obj)
+    if encoder is not None:
+        return encoder(obj)
+    if is_dataclass_instance(obj):
+        return {f.name: getattr(obj, f.name) for f in dataclasses.fields(obj)}
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 BufferEncoder.register(np.generic, lambda obj: obj.item())
 BufferEncoder.register(np.ndarray, lambda obj: obj.tolist())
 BufferEncoder.register(ScipyRotation, lambda obj: obj.as_euler("xyz", degrees=True))

@@ -268,11 +268,14 @@ class SalienceSMTelemetryRecordingTest(unittest.TestCase):
                 self.locations_map[row, col] = [row, col, 1.0]
         self.segmentation_map = np.array([[1, 0], [1, 1]], dtype=np.uint8)
         self.weighted_salience = np.array([0.1, 0.5, 0.9])
+        # A real array rather than a sentinel: the salience map now rides into
+        # telemetry, which casts it to a float32 ndarray.
+        self.salience_map = np.array([[0.2, 0.4], [0.6, 0.8]])
 
         self.telemetry = SalienceSMTelemetry(save_segmentation=True)
         self.sensor_module = SalienceSM(
             sensor_module_id="test",
-            salience_strategy=MagicMock(return_value=sentinel.salience_map),
+            salience_strategy=MagicMock(return_value=self.salience_map),
             return_inhibitor=MagicMock(return_value=sentinel.ior_weights),
             snapshot_telemetry=self.telemetry,
             segmentation_strategy=MagicMock(return_value=self.segmentation_map),
@@ -310,6 +313,11 @@ class SalienceSMTelemetryRecordingTest(unittest.TestCase):
         )
         self.assertEqual(state["regions"][0], self.sensor_module.propose_region())
 
+    def test_step_records_the_salience_map_the_strategy_computed(self) -> None:
+        self.step()
+        (recorded,) = self.telemetry.state_dict()["salience_maps"]
+        np.testing.assert_array_almost_equal(recorded, self.salience_map)
+
     def test_step_does_not_record_while_exploring(self) -> None:
         self.sensor_module.is_exploring = True
         self.step()
@@ -327,7 +335,13 @@ class SalienceSMTelemetryRecordingTest(unittest.TestCase):
         state = self.sensor_module.state_dict()
         self.assertEqual(
             set(state),
-            {"raw_observations", "sm_properties", "segmentation_maps", "regions"},
+            {
+                "raw_observations",
+                "sm_properties",
+                "salience_maps",
+                "segmentation_maps",
+                "regions",
+            },
         )
 
     def test_recording_is_off_unless_save_segmentation_is_set(self) -> None:

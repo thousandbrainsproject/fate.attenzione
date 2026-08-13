@@ -194,7 +194,9 @@ class SalienceSM(SensorModule):
                 self._snapshot_telemetry.raw_observation(
                     observation, self.state.rotation, self.state.position
                 )
-            self._snapshot_telemetry.record(segmentation_map, self._region)
+            self._snapshot_telemetry.record(
+                segmentation_map, self._region, salience_map
+            )
 
     def _segment_region(
         self,

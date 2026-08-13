@@ -49,6 +49,18 @@ class SalienceSMTelemetryTest(unittest.TestCase):
         state = telemetry.state_dict()
         self.assertEqual(state["segmentation_maps"], [])
         self.assertEqual(state["regions"], [])
+        self.assertEqual(state["salience_maps"], [])
+
+    def test_records_the_salience_map_as_float32(self) -> None:
+        salience = np.array([[0.25, 1.0], [0.0, 0.5]])
+        self.telemetry.record(self.mask, self.region, salience)
+        (recorded,) = self.telemetry.state_dict()["salience_maps"]
+        self.assertEqual(recorded.dtype, np.float32)
+        np.testing.assert_array_equal(recorded, salience.astype(np.float32))
+
+    def test_an_omitted_salience_map_is_recorded_as_none(self) -> None:
+        self.telemetry.record(self.mask, self.region)
+        self.assertEqual(self.telemetry.state_dict()["salience_maps"], [None])
 
     def test_state_dict_includes_the_snapshot_telemetry(self) -> None:
         state = self.telemetry.state_dict()

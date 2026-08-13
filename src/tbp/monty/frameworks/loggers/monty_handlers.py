@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import abc
 import copy
-import json
+import orjson
 import logging
 import os
 from pathlib import Path
@@ -22,7 +22,7 @@ from typing import Container, Literal
 from typing_extensions import override
 
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
-from tbp.monty.frameworks.models.buffer import BufferEncoder
+from tbp.monty.frameworks.models.buffer import buffer_encoder_default
 from tbp.monty.frameworks.utils.logging_utils import (
     lm_stats_to_dataframe,
     maybe_rename_existing_file,
@@ -161,11 +161,13 @@ class DetailedJSONHandler(MontyHandler):
         episode_file = episodes_dir / f"episode_{global_episode_id:06d}.json"
         maybe_rename_existing_file(episode_file)
 
-        with episode_file.open("w") as f:
-            json.dump(
-                {global_episode_id: stats[global_episode_id]},
-                f,
-                cls=BufferEncoder,
+        with episode_file.open("wb") as f:
+            f.write(
+                orjson.dumps(
+                    {global_episode_id: stats[global_episode_id]},
+                    default=buffer_encoder_default,
+                    option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_NON_STR_KEYS,
+                )
             )
 
         logger.debug(
@@ -181,13 +183,15 @@ class DetailedJSONHandler(MontyHandler):
             maybe_rename_existing_file(save_stats_path)
             self.already_renamed = True
 
-        with save_stats_path.open("a") as f:
-            json.dump(
-                {global_episode_id: stats[global_episode_id]},
-                f,
-                cls=BufferEncoder,
+        with save_stats_path.open("ab") as f:
+            f.write(
+                orjson.dumps(
+                    {global_episode_id: stats[global_episode_id]},
+                    default=buffer_encoder_default,
+                    option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_NON_STR_KEYS,
+                )
             )
-            f.write(os.linesep)
+            f.write(os.linesep.encode())
 
         logger.debug(
             "Appended detailed stats for episode %s to %s",

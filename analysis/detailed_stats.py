@@ -18,6 +18,25 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    import orjson
+except ImportError:  # pragma: no cover - orjson is in the project deps
+    orjson = None
+
+
+def _loads(data: bytes) -> dict:
+    """Parse JSON bytes, preferring orjson with a stdlib fallback.
+
+    The fallback covers files written by the stdlib encoder that contain
+    NaN/Infinity literals, which orjson rejects.
+    """
+    if orjson is not None:
+        try:
+            return orjson.loads(data)
+        except ValueError:
+            pass
+    return json.loads(data)
+
 
 def load_episode_stats(exp_dir: Path, episode: int = 0) -> dict:
     """Load one episode's detailed stats from an experiment directory.
@@ -38,7 +57,7 @@ def load_episode_stats(exp_dir: Path, episode: int = 0) -> dict:
     per_episode_dir = exp_dir / "detailed_run_stats"
     if per_episode_dir.is_dir():
         path = per_episode_dir / f"episode_{episode:06d}.json"
-        data = json.loads(path.read_text())
+        data = _loads(path.read_bytes())
         return data[str(episode)]
 
     single_file = exp_dir / "detailed_run_stats.json"
@@ -46,7 +65,7 @@ def load_episode_stats(exp_dir: Path, episode: int = 0) -> dict:
         with single_file.open() as f:
             for line_number, line in enumerate(f):
                 if line_number == episode:
-                    return json.loads(line)[str(episode)]
+                    return _loads(line.encode())[str(episode)]
         raise FileNotFoundError(f"Episode {episode} not found in {single_file}")
 
     raise FileNotFoundError(f"No detailed stats found under {exp_dir}")

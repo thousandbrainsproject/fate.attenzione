@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import copy
 import json
+
+import orjson
 import logging
 import shutil
 from collections import deque
@@ -63,11 +65,13 @@ def load_stats(
         print("...loading detailed run statistics...")
         json_file = exp_path / "detailed_run_stats.json"
         try:
-            with json_file.open() as f:
-                detailed_stats = json.load(f)
+            with json_file.open("rb") as f:
+                # orjson.JSONDecodeError subclasses ValueError, so files it
+                # cannot parse (e.g. stdlib-written ones containing NaN
+                # literals) fall through to the chunked stdlib reader.
+                detailed_stats = orjson.loads(f.read())
         except ValueError:
             detailed_stats = deserialize_json_chunks(json_file)
-        f.close()
 
     if load_models:
         print("...loading LM models...")
