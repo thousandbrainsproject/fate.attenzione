@@ -16,7 +16,7 @@ import pandas as pd
 import quaternion as qt
 
 from tbp.monty.attention.attention_system import INITIAL_WEIGHT
-from tbp.monty.attention.voxels import VOXEL_LEVELS, voxelize_and_bin_points
+from tbp.monty.attention.voxels import VOXEL_LEVELS, Voxel, voxelize_and_bin_points
 from tbp.monty.cmp import AttentionWeight, Goal
 from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.models.abstract_monty_classes import (
@@ -97,7 +97,8 @@ def _keep_center_cluster(
 
 class SalienceSM(SensorModule):
     _salience3d: pd.Series
-    _salience3d_diff_threshold: float = 0.1
+    _salience3d_diff_threshold: float = 0.5
+    _salience3d_diff_confidence_boost: float = 1.0
     _voxel_size: float = 0.01
 
     def __init__(
@@ -181,29 +182,58 @@ class SalienceSM(SensorModule):
 
         on_object = on_object_observation(observation, salience_map)
 
-        self._salience3d_diff = self._step_salience3d(on_object)
+        self._salience3d_diff, covoxel_points = self._step_salience3d(on_object)
+        self._goals = [
+            Goal(
+                location=on_object.locations[i],
+                morphological_features=None,
+                non_morphological_features=None,
+                confidence=magnitude,
+                use_state=False,  # SalienceSM goals are intended for the motor system
+                sender_id=self._sensor_module_id,
+                sender_type="SM",
+                goal_tolerances=None,
+            )
+            for voxel, magnitude in self._salience3d_diff.items()
+            for i in covoxel_points.get(voxel, [])
+        ]
 
         ior_weights = self._return_inhibitor(
             on_object.center_location, on_object.locations
         )
         salience = self._weight_salience(ctx, on_object.salience, ior_weights)
 
-        self._goals = [
-            Goal(
-                location=on_object.locations[i],
-                morphological_features=None,
-                non_morphological_features=None,
-                confidence=salience[i],
-                use_state=False,  # SalienceSM goals are intended for the motor system
-                sender_id=self._sensor_module_id,
-                sender_type="SM",
-                goal_tolerances=None,
-            )
-            for i in range(len(on_object.locations))
-        ]
+        self._goals.extend(
+            [
+                Goal(
+                    location=on_object.locations[i],
+                    morphological_features=None,
+                    non_morphological_features=None,
+                    confidence=salience[i],
+                    use_state=False,  # SalienceSM goals are intended for the motor system
+                    sender_id=self._sensor_module_id,
+                    sender_type="SM",
+                    goal_tolerances=None,
+                )
+                for i in range(len(on_object.locations))
+            ]
+        )
 
         segmentation_map, self._region = self._segment_region(
             ctx, observation, on_object, salience
+        )
+
+        self._region.extend(
+            [
+                AttentionWeight(
+                    location=on_object.locations[i],
+                    weight=INITIAL_WEIGHT,
+                    sender_id=self._sensor_module_id,
+                    sender_type="SM",
+                )
+                for voxel in self._salience3d_diff.index
+                for i in covoxel_points.get(voxel, [])
+            ]
         )
 
         if not self.is_exploring:
@@ -214,16 +244,26 @@ class SalienceSM(SensorModule):
             self._snapshot_telemetry.record(segmentation_map, self._region)
             self._snapshot_telemetry.salience3d_diff(self._salience3d_diff)
 
-    def _step_salience3d(self, on_object: OnObjectObservation) -> pd.Series:
-        current = salience3d(on_object.locations, on_object.salience, self._voxel_size)
+    def _step_salience3d(
+        self, on_object: OnObjectObservation
+    ) -> tuple[pd.Series, dict[Voxel, list[int]]]:
+        covoxel_points = voxelize_and_bin_points(on_object.locations, self._voxel_size)
+        current = salience3d(covoxel_points, on_object.salience)
 
         previous = self._previous_salience3d
         self._previous_salience3d = current
         if previous is None:
-            return empty_salience3d()
+            return empty_salience3d(), covoxel_points
 
-        diff = current.sub(previous, fill_value=0).abs()
-        return diff[diff > self._salience3d_diff_threshold]
+        # We only want to consider changes in the current voxel levels, so we reindex
+        # the previous salience3d to the current index and fill with 0 for any levels
+        # that are not in the current salience3d. "Out of sight, out of mind."
+        diff = current.sub(previous.reindex(current.index, fill_value=0)).abs()
+        diff = (
+            diff[diff > self._salience3d_diff_threshold]
+            * self._salience3d_diff_confidence_boost
+        )
+        return diff, covoxel_points
 
     def _segment_region(
         self,
@@ -334,11 +374,9 @@ def empty_salience3d() -> pd.Series:
 
 
 def salience3d(
-    locations: np.ndarray,
+    covoxel_points: dict[Voxel, list[int]],
     salience: np.ndarray,
-    voxel_size: float,
 ) -> pd.Series:
-    covoxel_points = voxelize_and_bin_points(locations, voxel_size)
     if not covoxel_points:
         return empty_salience3d()
 

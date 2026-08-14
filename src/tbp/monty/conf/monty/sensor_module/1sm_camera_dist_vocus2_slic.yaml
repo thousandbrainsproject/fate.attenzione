@@ -44,4 +44,5 @@ sensor_module_1:
   snapshot_telemetry:
     _target_: tbp.monty.frameworks.models.salience.telemetry.SalienceSMTelemetry
     save_segmentation: true
+    save_salience3d_diff: true
 
