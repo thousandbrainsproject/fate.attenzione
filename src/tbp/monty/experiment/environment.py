@@ -735,11 +735,11 @@ class FateAttenzioneInterface(Interface):
             position=np.array([-0.02, 1.4, 0.08]),
             rotation=(1.0, 0.0, 0.0, 0.0),
         )
-        self.env.add_object(
-            name="room",
-            position=np.array([0, 0.8, 0]),
-            rotation=(1.0, 0.0, 0.0, 0.0),
-        )
+        # self.env.add_object(
+        #     name="room",
+        #     position=np.array([0, 0.8, 0]),
+        #     rotation=(1.0, 0.0, 0.0, 0.0),
+        # )
 
         # self.env.add_object(
         #     name="box",
