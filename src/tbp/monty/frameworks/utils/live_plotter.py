@@ -399,9 +399,9 @@ class LivePlotter:
         if self.camera_image:
             self.camera_image.remove()
 
-        view_finder_rgba = self._overlay_segmentation(
-            view_finder_rgba, segmentation_mask
-        )
+        # view_finder_rgba = self._overlay_segmentation(
+        #     view_finder_rgba, segmentation_mask
+        # )
 
         if is_saccade_on_image_data_loader:
             center_pixel_id = np.array([200, 200])
