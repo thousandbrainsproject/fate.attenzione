@@ -95,7 +95,12 @@ class AttentionSystem:
             The percepts inside an occupied voxel, plus any without a location.
             All percepts, if the grid is empty.
         """
+        # Telemetry gets one entry per call: the sender ids of the percepts
+        # disabled below.
+        filtered: list[str] = []
+
         if len(self._voxel_grid) == 0:
+            self._telemetry.percept_filtering(filtered)
             return list(percepts)
 
         indices = []
@@ -109,13 +114,19 @@ class AttentionSystem:
         locations = np.stack(locations)
         contained = self.contains_points(locations)
         for i, c in enumerate(contained):
-            if not c:
-                p = percepts[indices[i]]
+            p = percepts[indices[i]]
+            if c:
+                # Handle percept falling in negative-weighted voxel.
                 voxel = self._voxel_index(p.location)
-                if tuple(voxel) in self._voxel_grid.index:
-                    weight = self._voxel_grid.loc[voxel, "weight"].to_numpy()
-                    if weight < 0:
-                        percepts[indices[i]].use_state = False
+                weight = self._voxel_grid.loc[voxel, "weight"].to_numpy()
+                if weight < 0:
+                    p.use_state = False
+                    filtered.append(p.sender_id)
+            else:
+                # Handle percept not in any voxel.
+                p.use_state = False
+                filtered.append(p.sender_id)
+        self._telemetry.percept_filtering(filtered)
         return percepts
 
     def filter_goals(self, goals: list[Goal]) -> list[Goal]:
@@ -158,6 +169,17 @@ class AttentionSystem:
         return filtered
 
     def update_regions(self, regions: list[list[AttentionWeight]]) -> None:
+        # Record who proposed inhibition before the weights are voxelized away.
+        self._telemetry.region_inhibition(
+            sorted(
+                {
+                    aw.sender_id
+                    for region in regions
+                    for aw in region
+                    if aw.location is not None and aw.weight < 0
+                }
+            )
+        )
         proposed = self._voxelize_regions(regions)
         decayed = self._decay(self._voxel_grid)
         merged = self._merge(decayed, proposed)

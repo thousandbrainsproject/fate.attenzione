@@ -21,11 +21,31 @@ class AttentionSystemTelemetry:
         self.voxel_grids: list[pd.DataFrame] = []
         self.pre_filter_goals: list[list[Goal]] = []
         self.post_filter_goals: list[list[Goal]] = []
+        self.filtered_percepts: list[list[str]] = []
+        self.inhibitory_senders: list[list[str]] = []
 
     def reset(self) -> None:
         self.voxel_grids = []
         self.pre_filter_goals = []
         self.post_filter_goals = []
+        self.filtered_percepts = []
+        self.inhibitory_senders = []
+
+    def percept_filtering(self, filtered: list[str]) -> None:
+        """Record which percepts were disabled on one call.
+
+        Args:
+            filtered: Sender ids of the percepts whose use_state was disabled.
+        """
+        self.filtered_percepts.append(list(filtered))
+
+    def region_inhibition(self, senders: list[str]) -> None:
+        """Record which modules proposed inhibitory regions in one update.
+
+        Args:
+            senders: Sender ids that proposed negative-weight regions.
+        """
+        self.inhibitory_senders.append(list(senders))
 
     def voxel_grid(self, grid: pd.DataFrame) -> None:
         self.voxel_grids.append(grid.copy())
@@ -51,4 +71,6 @@ class AttentionSystemTelemetry:
             ],
             pre_filter_goals=self.pre_filter_goals,
             post_filter_goals=self.post_filter_goals,
+            filtered_percepts=self.filtered_percepts,
+            inhibitory_senders=self.inhibitory_senders,
         )

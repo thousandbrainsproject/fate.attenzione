@@ -124,7 +124,10 @@ class SMTelemetry:
         return any(mask is not None for mask in self.segmentation_maps)
 
     def overlay(self, frame: int) -> np.ndarray:
-        """Return the rgba frame with the segmentation tinted in green.
+        """Return the rgba frame with the segmentation tinted and outlined.
+
+        The segmented region is tinted green and traced with a black contour
+        so its extent is obvious against the scene.
 
         Args:
             frame: Which frame to render.
@@ -145,6 +148,27 @@ class SMTelemetry:
         tint[..., 3] = 128
         active = mask > 0
         rgba[active] = (rgba[active] * 0.6 + tint[active] * 0.4).astype(np.uint8)
+
+        # Contour: active pixels with at least one inactive 4-neighbour,
+        # dilated by one pixel so the outline reads at gif scale.
+        padded = np.pad(active, 1, mode="edge")
+        interior = (
+            padded[:-2, 1:-1]
+            & padded[2:, 1:-1]
+            & padded[1:-1, :-2]
+            & padded[1:-1, 2:]
+        )
+        outline = active & ~interior
+        padded = np.pad(outline, 1)
+        outline = (
+            outline
+            | padded[:-2, 1:-1]
+            | padded[2:, 1:-1]
+            | padded[1:-1, :-2]
+            | padded[1:-1, 2:]
+        )
+        rgba[outline, :3] = 0
+        rgba[outline, 3] = 255
         return rgba
 
     def region_at(self, frame: int) -> tuple[np.ndarray, np.ndarray]:
